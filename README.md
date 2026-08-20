@@ -83,6 +83,7 @@ The repository is intentionally arranged to mirror the relevant Klipper installa
 ```text
 Klipper-Eddy-Tap-Wizard/
 │
+├── install.sh
 ├── README.md
 │
 ├── printer_data/
@@ -169,6 +170,314 @@ The exact filename is not important as long as Klipper has one valid `[save_vari
 
 # Installation
 
+The recommended installation method is the included `install.sh` script.
+
+The installer automates the parts of the installation that are safe to automate while leaving printer-specific Eddy hardware configuration to the user.
+
+## What the Installer Does
+
+The installer will:
+
+- Detect the normal Klipper paths:
+  - `~/printer_data/config`
+  - `~/klipper`
+- Validate that the required project files exist
+- Install `eddy_macros.cfg`
+- Install `eddy_setup_wizard.cfg`
+- Create backups before replacing existing files
+- Check for the required include statements
+- Offer to add missing includes to `printer.cfg`
+- Check for an existing `[save_variables]` section
+- Offer to add `[save_variables]` if one is not already configured
+- Check the installed Klipper `temperature_probe.py`
+- Detect whether the required Eddy Tap thermal changes are already present
+- Back up and install the project's modified `temperature_probe.py` when required
+- Avoid blindly overwriting an already-modified/newer `temperature_probe.py`
+- Restart Klipper when installation is complete
+
+The installer does **not** attempt to create your printer-specific:
+
+```ini
+[probe_eddy_current <name>]
+```
+
+or:
+
+```ini
+[temperature_probe <name>]
+```
+
+sections. MCU IDs, I2C settings, sensor pins, probe offsets, machine geometry, and similar hardware-specific values must still be configured for your printer.
+
+---
+
+## 1. SSH Into the Klipper Host
+
+Connect to the Linux host running Klipper using SSH.
+
+The following commands should be run as the normal Klipper user.
+
+> Do **not** run the installer itself with `sudo`.
+
+---
+
+## 2. Clone the Repository
+
+The current development version is on the `test` branch:
+
+```bash
+cd ~
+git clone --branch test --single-branch \
+  https://github.com/ss1gohan13/Klipper-Eddy-Tap-Wizard.git
+```
+
+This creates:
+
+```text
+~/Klipper-Eddy-Tap-Wizard/
+```
+
+---
+
+## 3. Run the Installer
+
+Enter the repository:
+
+```bash
+cd ~/Klipper-Eddy-Tap-Wizard
+```
+
+Then run:
+
+```bash
+./install.sh
+```
+
+No `chmod +x` step should be necessary when the repository is cloned normally because `install.sh` is stored in Git as an executable file.
+
+If the executable permission was stripped by a ZIP download, Windows copy, or another transfer method, it can still be run with:
+
+```bash
+bash install.sh
+```
+
+---
+
+## Installer Prompts
+
+During installation you may be asked whether the script should:
+
+- Add missing Eddy Wizard include statements
+- Add `[save_variables]` if none exists
+- Replace the installed `temperature_probe.py` when the required Eddy Tap changes are missing
+- Restart Klipper when installation is complete
+
+Existing files are backed up before the installer replaces or modifies them.
+
+Backups are stored under:
+
+```text
+~/printer_data/config/eddy_wizard_backups/<timestamp>/
+```
+
+---
+
+## Required Includes
+
+The installer checks for:
+
+```ini
+[include eddy_setup_wizard.cfg]
+[include eddy_macros.cfg]
+```
+
+If they are missing, the installer can add them to:
+
+```text
+~/printer_data/config/printer.cfg
+```
+
+If you choose not to let the installer add them, add the includes manually before running `EDDY_SETUP`.
+
+---
+
+## `[save_variables]`
+
+The wizard requires one valid `[save_variables]` section.
+
+The installer checks the Klipper config tree first and will not intentionally create a duplicate.
+
+If none exists, it can add:
+
+```ini
+[save_variables]
+filename: ~/printer_data/config/saved_variables.cfg
+```
+
+---
+
+# Updating the Wizard
+
+After the initial installation, future project updates can be handled by the same installer.
+
+Run:
+
+```bash
+cd ~/Klipper-Eddy-Tap-Wizard
+./install.sh --update
+```
+
+The installer will:
+
+1. Detect the currently checked-out Git branch
+2. Run a fast-forward-only `git pull` from that branch
+3. Re-run the updated installer
+4. Update the managed project files as needed
+5. Re-check `temperature_probe.py`
+6. Restart Klipper when requested
+
+While testing the project on the `test` branch, this updates from `test`.
+
+If the project is later installed from `main`, the same command updates from `main`.
+
+---
+
+## Useful Installer Options
+
+### Automatically accept normal prompts
+
+```bash
+./install.sh --yes
+```
+
+### Update and automatically accept prompts
+
+```bash
+./install.sh --update --yes
+```
+
+### Install/update without restarting Klipper
+
+```bash
+./install.sh --no-restart
+```
+
+### Show installer help
+
+```bash
+./install.sh --help
+```
+
+---
+
+# Checking the Installed Files
+
+The wizard configuration files are installed at:
+
+```text
+~/printer_data/config/eddy_macros.cfg
+~/printer_data/config/eddy_setup_wizard.cfg
+```
+
+The modified Klipper file, when required, is installed at:
+
+```text
+~/klipper/klippy/extras/temperature_probe.py
+```
+
+The two `.cfg` files are linked to the repository checkout so project updates are immediately reflected in those files.
+
+`temperature_probe.py` is managed as a copied file rather than a symlink. This avoids replacing a Git-tracked Klipper source file with a symlink while still allowing the installer to safely update the project-managed version.
+
+---
+
+# Manual Installation
+
+Manual installation is still possible if you do not want to use `install.sh`.
+
+Copy:
+
+```text
+Klipper-Eddy-Tap-Wizard/printer_data/config/eddy_macros.cfg
+```
+
+to:
+
+```text
+~/printer_data/config/eddy_macros.cfg
+```
+
+and:
+
+```text
+Klipper-Eddy-Tap-Wizard/printer_data/config/eddy_setup_wizard.cfg
+```
+
+to:
+
+```text
+~/printer_data/config/eddy_setup_wizard.cfg
+```
+
+Then add:
+
+```ini
+[include eddy_setup_wizard.cfg]
+[include eddy_macros.cfg]
+```
+
+to a loaded Klipper configuration file.
+
+If the required Eddy Tap thermal fixes are not already present in your Klipper installation, back up:
+
+```text
+~/klipper/klippy/extras/temperature_probe.py
+```
+
+and replace it with:
+
+```text
+Klipper-Eddy-Tap-Wizard/klipper/klippy/extras/temperature_probe.py
+```
+
+Restart Klipper after manual installation.
+
+---
+
+# Contributing Changes With a Pull Request
+
+A Pull Request is only needed if you want to propose changes back to the project.
+
+A typical contribution workflow is:
+
+1. Fork the repository on GitHub.
+2. Clone your fork.
+3. Create a new branch.
+4. Make and test your changes.
+5. Commit the changes.
+6. Push the branch to your fork.
+7. Open a Pull Request against this repository.
+
+Example local workflow:
+
+```bash
+git switch -c my-eddy-change
+
+# Make and test changes
+
+git add .
+git commit -m "Describe the Eddy wizard change"
+git push -u origin my-eddy-change
+```
+
+Then use GitHub to open a Pull Request from `my-eddy-change` into the appropriate project branch.
+
+---
+
+# Manual Installation
+
+If you do not want the repository files linked directly into your Klipper installation, use the manual copy method below.
+
 ## 1. Back Up Your Existing Files
 
 Before installing, back up your configuration:
@@ -186,7 +495,7 @@ cp ~/klipper/klippy/extras/temperature_probe.py \
 
 ---
 
-## 2. Install the Wizard Configuration Files
+## 2. Copy the Wizard Configuration Files
 
 Copy:
 
@@ -237,7 +546,7 @@ Restart Klipper after adding the includes.
 
 ---
 
-## 4. Install the Modified `temperature_probe.py`
+## 4. Copy the Modified `temperature_probe.py`
 
 If your current Klipper installation does not yet contain the required Eddy Tap thermal-calibration fixes, copy:
 
@@ -840,7 +1149,7 @@ Do not arbitrarily increase the threshold without understanding the effect on Ta
 
 ---
 
-# Updating Klipper
+# Updating Upstream Klipper
 
 Because Eddy support is actively evolving, Klipper updates may change:
 
