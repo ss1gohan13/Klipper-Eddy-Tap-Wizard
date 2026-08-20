@@ -322,19 +322,29 @@ else
     warn "One or more Eddy Wizard include statements were not found."
 
     if [[ -f "${PRINTER_CFG}" ]]; then
-        if ask_yes_no "Add missing Eddy Wizard include statements to ${PRINTER_CFG}?" "y"; then
+        if ask_yes_no "Add missing Eddy Wizard include statements to the TOP of ${PRINTER_CFG}?" "y"; then
             backup_path "${PRINTER_CFG}" "printer.cfg.before_eddy_wizard"
 
+            # Prepend the Eddy Wizard includes to the TOP of printer.cfg.
+            # This keeps them above Klipper's SAVE_CONFIG autosave block.
+            tmp_cfg="$(mktemp)"
+
             {
-                printf '\n# >>> Klipper Eddy Tap Wizard >>>\n'
+                printf '# >>> Klipper Eddy Tap Wizard >>>\n'
                 [[ "${wizard_include_present}" -eq 0 ]] && \
                     printf '[include eddy_setup_wizard.cfg]\n'
                 [[ "${macros_include_present}" -eq 0 ]] && \
                     printf '[include eddy_macros.cfg]\n'
-                printf '# <<< Klipper Eddy Tap Wizard <<<\n'
-            } >> "${PRINTER_CFG}"
+                printf '# <<< Klipper Eddy Tap Wizard <<<\n\n'
+                cat "${PRINTER_CFG}"
+            } > "${tmp_cfg}"
 
-            ok "Added missing include statements to ${PRINTER_CFG}."
+            # Write through the existing path instead of replacing it so a
+            # printer.cfg symlink, ownership, and permissions are preserved.
+            cat "${tmp_cfg}" > "${PRINTER_CFG}"
+            rm -f -- "${tmp_cfg}"
+
+            ok "Added missing include statements to the TOP of ${PRINTER_CFG}."
         else
             warn "Include statements were not added. Add them manually before running EDDY_SETUP."
         fi
@@ -360,14 +370,42 @@ else
             backup_path "${PRINTER_CFG}" "printer.cfg.before_save_variables"
             touch "${CONFIG_DIR}/saved_variables.cfg"
 
-            cat >> "${PRINTER_CFG}" <<'EOF'
+            # Keep [save_variables] above SAVE_CONFIG too. If the Eddy
+            # include block was added above, insert this directly after it.
+            tmp_cfg="$(mktemp)"
 
+            if grep -Fq '# <<< Klipper Eddy Tap Wizard <<<' "${PRINTER_CFG}"; then
+                awk '
+                    {
+                        print
+                        if ($0 == "# <<< Klipper Eddy Tap Wizard <<<" && !inserted) {
+                            print ""
+                            print "# >>> Klipper Eddy Tap Wizard save_variables >>>"
+                            print "[save_variables]"
+                            print "filename: ~/printer_data/config/saved_variables.cfg"
+                            print "# <<< Klipper Eddy Tap Wizard save_variables <<<"
+                            print ""
+                            inserted=1
+                        }
+                    }
+                ' "${PRINTER_CFG}" > "${tmp_cfg}"
+            else
+                {
+                    cat <<'EOF'
 # >>> Klipper Eddy Tap Wizard save_variables >>>
 [save_variables]
 filename: ~/printer_data/config/saved_variables.cfg
 # <<< Klipper Eddy Tap Wizard save_variables <<<
+
 EOF
-            ok "Added [save_variables] and ensured saved_variables.cfg exists."
+                    cat "${PRINTER_CFG}"
+                } > "${tmp_cfg}"
+            fi
+
+            cat "${tmp_cfg}" > "${PRINTER_CFG}"
+            rm -f -- "${tmp_cfg}"
+
+            ok "Added [save_variables] above any SAVE_CONFIG block and ensured saved_variables.cfg exists."
         else
             warn "The wizard requires [save_variables]. Add one before running EDDY_SETUP."
         fi
