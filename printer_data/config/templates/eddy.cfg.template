@@ -1,0 +1,210 @@
+#####################################################################
+# Klipper Eddy Tap Wizard - Minimum Eddy Configuration
+#####################################################################
+# Eddy Tap Wizard
+#####################################################################
+
+[include eddy_setup_wizard.cfg]
+[include eddy_macros.cfg]
+
+#####################################################################
+# Eddy MCU
+#####################################################################
+
+[mcu eddy]
+# USB:
+serial: {{EDDY_SERIAL}}
+restart_method: command
+# CAN - use instead of "serial" when applicable:
+#canbus_uuid: {{EDDY_CANBUS_UUID}}
+
+#####################################################################
+# Eddy MCU Temperature
+#####################################################################
+
+[temperature_sensor eddy]
+sensor_type: temperature_mcu
+sensor_mcu: eddy
+min_temp: 10
+max_temp: 100
+
+#####################################################################
+# Eddy Probe
+#####################################################################
+
+[probe_eddy_current eddy]
+sensor_type: ldc1612
+descend_z: 0.5
+x_offset: {{X_OFFSET}}
+y_offset: {{Y_OFFSET}}
+i2c_mcu: eddy
+i2c_bus: i2c0f
+
+#####################################################################
+# Temperature Calibration Settings
+#####################################################################
+#
+# These values are customizable for the printer and its normal
+# operating temperatures.
+#
+# Recommended starting/default values:
+#
+#   calibration_bed_temp:       95
+#   calibration_extruder_temp: 150
+#   max_validation_temp:       100
+#
+#####################################################################
+# Eddy Temperature Compensation
+#####################################################################
+
+[temperature_probe eddy]
+sensor_type: Generic 3950
+sensor_pin: eddy:gpio26
+calibration_position: {{BED_CENTER_X}}, {{BED_CENTER_Y}}, 5
+calibration_bed_temp: {{CALIBRATION_BED_TEMP}}
+calibration_extruder_temp: {{CALIBRATION_EXTRUDER_TEMP}}
+extruder_heating_z: 5
+max_validation_temp: {{MAX_VALIDATION_TEMP}}
+
+#####################################################################
+# Bed Mesh
+#####################################################################
+
+[bed_mesh]
+horizontal_move_z: 1
+speed: 200
+mesh_min: {{MESH_MIN_X}}, {{MESH_MIN_Y}}
+mesh_max: {{MESH_MAX_X}}, {{MESH_MAX_Y}}
+probe_count: 11, 11
+zero_reference_position: {{BED_CENTER_X}}, {{BED_CENTER_Y}}
+mesh_pps: 3,3
+algorithm: bicubic
+scan_overshoot: 8
+adaptive_margin: 5
+fade_start: 1
+fade_end: 10
+fade_target: 0
+
+#####################################################################
+# OPTIONAL - Safe Z Home
+#####################################################################
+
+#[safe_z_home]
+#home_xy_position: {{BED_CENTER_X}}, {{BED_CENTER_Y}}
+#z_hop: 5
+#z_hop_speed: 5
+#speed: 200
+
+#####################################################################
+# OPTIONAL - Homing Override
+#####################################################################
+#
+# Do not enable [homing_override] and [safe_z_home] at the same time.
+#
+#####################################################################
+
+#[homing_override]
+#gcode:
+#    G91
+#    G0 Z5 F1000
+#
+#    {% if not rawparams or 'X' in rawparams|upper %}
+#        G28 X
+#        G90
+#        G0 X{{BED_CENTER_X}} F6000
+#        M400
+#    {% endif %}
+#
+#    {% if not rawparams or 'Y' in rawparams|upper %}
+#        G28 Y
+#        G90
+#        G0 Y{{BED_CENTER_Y}} F6000
+#        M400
+#    {% endif %}
+#
+#    {% if not rawparams or 'Z' in rawparams|upper %}
+#        G90
+#        G0 X{{BED_CENTER_X}} Y{{BED_CENTER_Y}} F6000
+#        G28 Z
+#        G91
+#        G0 Z5 F1000
+#    {% endif %}
+#
+#    G90
+#
+#axes: xyz
+#set_position_z: 0
+
+#####################################################################
+# OPTIONAL - Z Tilt
+#####################################################################
+
+#[z_tilt]
+#z_positions:
+#    {{Z1_POSITION_X}}, {{Z1_POSITION_Y}}
+#    {{Z2_POSITION_X}}, {{Z2_POSITION_Y}}
+#    #{{Z3_POSITION_X}}, {{Z3_POSITION_Y}}
+#
+#points:
+#    {{Z_TILT_POINT_1_X}}, {{Z_TILT_POINT_1_Y}}
+#    {{Z_TILT_POINT_2_X}}, {{Z_TILT_POINT_2_Y}}
+#    #{{Z_TILT_POINT_3_X}}, {{Z_TILT_POINT_3_Y}}
+#
+#speed: 200
+#horizontal_move_z: 5
+#retries: 10
+#retry_tolerance: 0.01
+
+#####################################################################
+# OPTIONAL - Quad Gantry Level
+#####################################################################
+
+#[quad_gantry_level]
+#gantry_corners:
+#    {{GANTRY_MIN_X}}, {{GANTRY_MIN_Y}}
+#    {{GANTRY_MAX_X}}, {{GANTRY_MAX_Y}}
+#
+#points:
+#    {{QGL_POINT_1_X}}, {{QGL_POINT_1_Y}}
+#    {{QGL_POINT_2_X}}, {{QGL_POINT_2_Y}}
+#    {{QGL_POINT_3_X}}, {{QGL_POINT_3_Y}}
+#    {{QGL_POINT_4_X}}, {{QGL_POINT_4_Y}}
+#
+#speed: 200
+#horizontal_move_z: 5
+#retries: 5
+#retry_tolerance: 0.01
+#max_adjust: 10
+
+#####################################################################
+# OPTIONAL - Bed Screws
+#####################################################################
+
+#[bed_screws]
+#screw1: {{BED_SCREW1_X}}, {{BED_SCREW1_Y}}
+#screw1_name: front left screw
+#screw2: {{BED_SCREW2_X}}, {{BED_SCREW2_Y}}
+#screw2_name: front right screw
+#screw3: {{BED_SCREW3_X}}, {{BED_SCREW3_Y}}
+#screw3_name: rear right screw
+#screw4: {{BED_SCREW4_X}}, {{BED_SCREW4_Y}}
+#screw4_name: rear left screw
+#speed: 200
+#horizontal_move_z: 5
+
+#####################################################################
+# OPTIONAL - Screws Tilt Adjust
+#####################################################################
+
+#[screws_tilt_adjust]
+#screw1: {{SCREW_TILT_1_X}}, {{SCREW_TILT_1_Y}}
+#screw1_name: front left screw
+#screw2: {{SCREW_TILT_2_X}}, {{SCREW_TILT_2_Y}}
+#screw2_name: front right screw
+#screw3: {{SCREW_TILT_3_X}}, {{SCREW_TILT_3_Y}}
+#screw3_name: rear right screw
+#screw4: {{SCREW_TILT_4_X}}, {{SCREW_TILT_4_Y}}
+#screw4_name: rear left screw
+#horizontal_move_z: 5
+#speed: 200
+#screw_thread: CW-M4
