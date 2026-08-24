@@ -17,7 +17,6 @@
 #   ./install.sh --update
 #   ./install.sh --yes
 #   ./install.sh --update --yes
-#   ./install.sh --no-restart
 #
 set -Eeuo pipefail
 
@@ -95,7 +94,6 @@ Options:
   --update       Pull the latest commit from the currently checked-out branch
                  before running the installer.
   -y, --yes      Automatically answer yes to installer prompts.
-  --no-restart   Do not restart the Klipper service after installation.
   -h, --help     Show this help.
 
 Environment overrides:
@@ -155,10 +153,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -y|--yes)
             AUTO_YES=1
-            shift
-            ;;
-        --no-restart)
-            DO_RESTART=0
             shift
             ;;
         -h|--help)
@@ -229,7 +223,6 @@ if [[ "${DO_UPDATE}" -eq 1 && "${AFTER_PULL}" -ne 1 ]]; then
     export EDDY_WIZARD_AFTER_PULL=1
     reexec_args=()
     [[ "${AUTO_YES}" -eq 1 ]] && reexec_args+=("--yes")
-    [[ "${DO_RESTART}" -eq 0 ]] && reexec_args+=("--no-restart")
     exec "${SCRIPT_PATH}" "${reexec_args[@]}"
 fi
 
@@ -531,24 +524,16 @@ fi
 # Restart Klipper
 # ---------------------------------------------------------------------------
 
-if [[ "${DO_RESTART}" -eq 1 ]]; then
-    if command -v systemctl >/dev/null 2>&1; then
-        if ask_yes_no "Restart Klipper now?" "y"; then
-            info "Restarting Klipper..."
-            if sudo systemctl restart klipper; then
-                ok "Klipper restarted."
-            else
-                warn "Klipper restart failed."
-                warn "Restart it manually after resolving the service/permission issue."
-            fi
-        else
-            warn "Klipper was not restarted. Restart it before using the updated wizard."
-        fi
+if command -v systemctl >/dev/null 2>&1; then
+    info "Restarting Klipper to load updated Python/config files..."
+
+    if sudo systemctl restart klipper; then
+        ok "Klipper restarted."
     else
-        warn "systemctl was not found. Restart Klipper manually."
+        die "Klipper restart failed. Restart Klipper manually before using the Eddy Setup Wizard."
     fi
 else
-    warn "Klipper restart skipped (--no-restart)."
+    die "systemctl was not found. Klipper must be restarted manually before using the Eddy Setup Wizard."
 fi
 
 printf '\n%sInstallation complete.%s\n' "${GREEN}${BOLD}" "${RESET}"
