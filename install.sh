@@ -5,6 +5,7 @@
 # This draft extends the existing installer with:
 #   - active Klipper config-tree discovery
 #   - native Eddy / BTT-style Eddy / Eddy-NG detection
+#   - legacy nested Eddy Tap Wizard layout detection/migration
 #   - legacy BIGTREETECH Klipper-fork warning
 #   - Full / Minimal eddy.cfg template generation for fresh installs
 #   - preservation of an existing user-owned eddy.cfg
@@ -55,6 +56,13 @@ SRC_TEMP_PROBE="${SCRIPT_DIR}/klipper/klippy/extras/temperature_probe.py"
 DST_MACROS="${CONFIG_DIR}/eddy_macros.cfg"
 DST_WIZARD="${CONFIG_DIR}/eddy_setup_wizard.cfg"
 DST_EDDY="${CONFIG_DIR}/eddy.cfg"
+
+# Previous Eddy Tap Wizard releases commonly used this nested layout.
+LEGACY_EDDY_DIR="${CONFIG_DIR}/eddy"
+LEGACY_EDDY_CFG="${LEGACY_EDDY_DIR}/eddy.cfg"
+LEGACY_MACROS="${LEGACY_EDDY_DIR}/eddy_macros.cfg"
+LEGACY_WIZARD="${LEGACY_EDDY_DIR}/eddy_setup_wizard.cfg"
+
 DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 
@@ -74,7 +82,13 @@ AFTER_PULL="${EDDY_WIZARD_AFTER_PULL:-0}"
 #   generated          = a template-generated ~/printer_data/config/eddy.cfg is active
 #   existing_eddy_file = a pre-existing user-owned eddy.cfg is activated without rewriting it
 #   existing_native    = use an existing native [probe_eddy_current ...] configuration in-place
+#   legacy_keep        = keep the previous config/eddy/ nested layout in-place
+#   legacy_migrated    = migrate the previous nested layout to flat config/ files
 CONFIG_MODE=""
+
+ACTIVE_DST_MACROS="${DST_MACROS}"
+ACTIVE_DST_WIZARD="${DST_WIZARD}"
+LEGACY_MIGRATION_CLEANUP_PENDING=0
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -134,10 +148,12 @@ Recommended update command:
 
 The installer:
   - discovers the active Klipper config tree starting at printer.cfg
-  - detects native Eddy, BTT-style Eddy, Eddy-NG, and common conflicts
+  - detects native Eddy, BTT-style Eddy, Eddy-NG, legacy nested Wizard layouts,
+    and common conflicts
   - generates ~/printer_data/config/eddy.cfg from a Full or Minimal template
     on a fresh setup
-  - never overwrites an existing eddy.cfg during a normal install/update
+  - can safely migrate the old config/eddy/ Wizard layout to flat config/ files
+  - never overwrites an existing flat eddy.cfg during a normal install/update
   - symlinks eddy_macros.cfg and eddy_setup_wizard.cfg into printer_data/config
   - backs up files before replacing/modifying them
   - checks/adds [save_variables] when required and none exists
@@ -469,8 +485,130 @@ print_active_cfg_tree() {
 
 declare -a NATIVE_EDDY_RECORDS=()
 declare -a EDDY_NG_RECORDS=()
+declare -a LEGACY_INCLUDE_RECORDS=()
+declare -a LEGACY_EXTRA_ACTIVE_FILES=()
+
 EDDY_STATE="none"
 BTT_STYLE=0
+LEGACY_WIZARD_DETECTED=0
+LEGACY_INCLUDE_USES_GLOB=0
+
+scan_legacy_include_references() {
+    local target_id=""
+    local file
+    local file_id
+    local result
+    local line_no
+    local text
+    local include_spec
+    local include_pattern
+    local candidate
+    local candidate_id
+    local base_dir
+    local include_kind
+    local -a matches=()
+
+    LEGACY_INCLUDE_RECORDS=()
+    LEGACY_INCLUDE_USES_GLOB=0
+
+    [[ -e "${LEGACY_EDDY_CFG}" || -L "${LEGACY_EDDY_CFG}" ]] || return 0
+    target_id="$(readlink -f -- "${LEGACY_EDDY_CFG}" 2>/dev/null || printf '%s' "${LEGACY_EDDY_CFG}")"
+
+    for file in "${ACTIVE_CFG_FILES[@]}"; do
+        file_id="$(readlink -f -- "${file}" 2>/dev/null || printf '%s' "${file}")"
+        [[ "${file_id}" == "${target_id}" ]] && continue
+
+        base_dir="$(dirname -- "${file}")"
+
+        while IFS= read -r result; do
+            [[ -n "${result}" ]] || continue
+            line_no="${result%%:*}"
+            text="${result#*:}"
+            include_spec="$(printf '%s\n' "${text}" | sed -E 's/^[[:space:]]*\[include[[:space:]]+([^]]+)\].*$/\1/')"
+            include_spec="$(trim "${include_spec}")"
+
+            if [[ "${include_spec}" = /* ]]; then
+                include_pattern="${include_spec}"
+            else
+                include_pattern="${base_dir}/${include_spec}"
+            fi
+
+            include_kind="direct"
+            case "${include_spec}" in
+                *'*'*|*'?'*|*'['*)
+                    include_kind="glob"
+                    matches=()
+                    mapfile -t matches < <(compgen -G "${include_pattern}" || true)
+
+                    for candidate in "${matches[@]}"; do
+                        [[ -e "${candidate}" || -L "${candidate}" ]] || continue
+                        candidate_id="$(readlink -f -- "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
+
+                        if [[ "${candidate_id}" == "${target_id}" ]]; then
+                            LEGACY_INCLUDE_RECORDS+=("${file}|${line_no}|${include_spec}|${include_kind}")
+                            LEGACY_INCLUDE_USES_GLOB=1
+                            break
+                        fi
+                    done
+                    ;;
+                *)
+                    [[ -e "${include_pattern}" || -L "${include_pattern}" ]] || continue
+                    candidate_id="$(readlink -f -- "${include_pattern}" 2>/dev/null || printf '%s' "${include_pattern}")"
+
+                    if [[ "${candidate_id}" == "${target_id}" ]]; then
+                        LEGACY_INCLUDE_RECORDS+=("${file}|${line_no}|${include_spec}|${include_kind}")
+                    fi
+                    ;;
+            esac
+        done < <(grep -nE '^[[:space:]]*\[include[[:space:]]+[^]]+\][[:space:]]*(#.*)?$' "${file}" 2>/dev/null || true)
+    done
+}
+
+scan_legacy_wizard_layout() {
+    local record=""
+    local probe_file=""
+    local probe_file_id=""
+    local legacy_cfg_id=""
+    local file
+
+    LEGACY_WIZARD_DETECTED=0
+    LEGACY_EXTRA_ACTIVE_FILES=()
+
+    (( ${#NATIVE_EDDY_RECORDS[@]} == 1 )) || return 0
+
+    record="${NATIVE_EDDY_RECORDS[0]}"
+    IFS='|' read -r probe_file _ _ <<< "${record}"
+
+    [[ -e "${LEGACY_EDDY_CFG}" || -L "${LEGACY_EDDY_CFG}" ]] || return 0
+    [[ -e "${LEGACY_WIZARD}" || -L "${LEGACY_WIZARD}" ]] || return 0
+    [[ -e "${LEGACY_MACROS}" || -L "${LEGACY_MACROS}" ]] || return 0
+
+    path_is_active "${LEGACY_EDDY_CFG}" || return 0
+    path_is_active "${LEGACY_WIZARD}" || return 0
+    path_is_active "${LEGACY_MACROS}" || return 0
+
+    probe_file_id="$(readlink -f -- "${probe_file}" 2>/dev/null || printf '%s' "${probe_file}")"
+    legacy_cfg_id="$(readlink -f -- "${LEGACY_EDDY_CFG}" 2>/dev/null || printf '%s' "${LEGACY_EDDY_CFG}")"
+    [[ "${probe_file_id}" == "${legacy_cfg_id}" ]] || return 0
+
+    # A valid old-layout Wizard install has exactly the Eddy config, Wizard,
+    # and macros active from config/eddy/. Extra active files make automatic
+    # migration ambiguous, but the layout is still identified and can be kept.
+    for file in "${ACTIVE_CFG_FILES[@]}"; do
+        if [[ "${file}" == "${LEGACY_EDDY_DIR}/"* ]]; then
+            case "$(basename -- "${file}")" in
+                eddy.cfg|eddy_setup_wizard.cfg|eddy_macros.cfg)
+                    ;;
+                *)
+                    LEGACY_EXTRA_ACTIVE_FILES+=("${file}")
+                    ;;
+            esac
+        fi
+    done
+
+    scan_legacy_include_references
+    LEGACY_WIZARD_DETECTED=1
+}
 
 scan_eddy_sections() {
     local file
@@ -482,6 +620,10 @@ scan_eddy_sections() {
     NATIVE_EDDY_RECORDS=()
     EDDY_NG_RECORDS=()
     BTT_STYLE=0
+    LEGACY_WIZARD_DETECTED=0
+    LEGACY_INCLUDE_RECORDS=()
+    LEGACY_EXTRA_ACTIVE_FILES=()
+    LEGACY_INCLUDE_USES_GLOB=0
 
     for file in "${ACTIVE_CFG_FILES[@]}"; do
         while IFS= read -r result; do
@@ -508,6 +650,8 @@ scan_eddy_sections() {
         fi
     done
 
+    scan_legacy_wizard_layout
+
     if (( ${#NATIVE_EDDY_RECORDS[@]} > 0 && ${#EDDY_NG_RECORDS[@]} > 0 )); then
         EDDY_STATE="conflict"
     elif (( ${#EDDY_NG_RECORDS[@]} > 1 )); then
@@ -518,7 +662,9 @@ scan_eddy_sections() {
     elif (( ${#EDDY_NG_RECORDS[@]} == 1 )); then
         EDDY_STATE="eddy_ng"
     elif (( ${#NATIVE_EDDY_RECORDS[@]} == 1 )); then
-        if path_is_active "${DST_EDDY}" \
+        if [[ "${LEGACY_WIZARD_DETECTED}" -eq 1 ]]; then
+            EDDY_STATE="legacy_wizard"
+        elif path_is_active "${DST_EDDY}" \
             && grep -Fq 'Klipper Eddy Tap Wizard' "${DST_EDDY}" 2>/dev/null; then
             EDDY_STATE="wizard"
         elif [[ "${BTT_STYLE}" -eq 1 ]]; then
@@ -551,7 +697,20 @@ print_ng_record() {
     printf '    File:  %s:%s\n' "${file}" "${line}"
 }
 
+print_legacy_include_record() {
+    local record="$1"
+    local file line include_spec include_kind
+
+    IFS='|' read -r file line include_spec include_kind <<< "${record}"
+    printf '    Include: %s:%s -> [include %s]' "${file}" "${line}" "${include_spec}"
+    [[ "${include_kind}" == "glob" ]] && printf ' (wildcard)'
+    printf '\n'
+}
+
 report_eddy_state() {
+    local record
+    local file
+
     printf '\n%sEddy configuration discovery%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
 
@@ -560,6 +719,29 @@ report_eddy_state() {
             ok "Existing Klipper Eddy Tap Wizard configuration detected."
             print_probe_record "${NATIVE_EDDY_RECORDS[0]}"
             info "User configuration: ${DST_EDDY}"
+            ;;
+        legacy_wizard)
+            ok "Existing legacy Eddy Tap Wizard layout detected."
+            print_probe_record "${NATIVE_EDDY_RECORDS[0]}"
+            info "Legacy directory: ${LEGACY_EDDY_DIR}"
+            info "Wizard:           ${LEGACY_WIZARD}"
+            info "Macros:           ${LEGACY_MACROS}"
+
+            if (( ${#LEGACY_INCLUDE_RECORDS[@]} > 0 )); then
+                for record in "${LEGACY_INCLUDE_RECORDS[@]}"; do
+                    print_legacy_include_record "${record}"
+                done
+            else
+                warn "The active include that loads ${LEGACY_EDDY_CFG} could not be identified."
+            fi
+
+            if (( ${#LEGACY_EXTRA_ACTIVE_FILES[@]} > 0 )); then
+                warn "Additional active files were found inside the legacy Eddy directory:"
+                for file in "${LEGACY_EXTRA_ACTIVE_FILES[@]}"; do
+                    printf '      %s\n' "${file}"
+                done
+                warn "Automatic flat-layout migration will be disabled until those files are reviewed."
+            fi
             ;;
         btt_native)
             ok "Existing native Eddy configuration detected."
@@ -919,6 +1101,165 @@ generate_eddy_cfg() {
 }
 
 # ---------------------------------------------------------------------------
+# Legacy nested Wizard layout migration
+# ---------------------------------------------------------------------------
+
+legacy_cfg_has_wizard_includes() {
+    grep -Eq '^[[:space:]]*\[include[[:space:]]+(\./)?eddy_setup_wizard\.cfg\][[:space:]]*(#.*)?$' "${LEGACY_EDDY_CFG}" \
+        && grep -Eq '^[[:space:]]*\[include[[:space:]]+(\./)?eddy_macros\.cfg\][[:space:]]*(#.*)?$' "${LEGACY_EDDY_CFG}"
+}
+
+legacy_migration_preflight() {
+    local record=""
+    local include_file=""
+    local include_line=""
+    local include_spec=""
+    local include_kind=""
+    local include_file_id=""
+    local printer_cfg_id=""
+
+    [[ "${LEGACY_WIZARD_DETECTED}" -eq 1 ]] \
+        || die "Legacy migration was requested, but the legacy Wizard layout is no longer detected."
+
+    if [[ -e "${DST_EDDY}" || -L "${DST_EDDY}" ]]; then
+        die "Cannot migrate automatically because ${DST_EDDY} already exists. It will not be overwritten."
+    fi
+
+    if (( ${#LEGACY_EXTRA_ACTIVE_FILES[@]} > 0 )); then
+        error "Automatic migration is disabled because extra active files exist under ${LEGACY_EDDY_DIR}:"
+        for file in "${LEGACY_EXTRA_ACTIVE_FILES[@]}"; do
+            printf '  %s\n' "${file}" >&2
+        done
+        die "Keep the legacy layout for now or review the extra files manually."
+    fi
+
+    if (( ${#LEGACY_INCLUDE_RECORDS[@]} != 1 )); then
+        die "Automatic migration requires exactly one active include that loads ${LEGACY_EDDY_CFG}; found ${#LEGACY_INCLUDE_RECORDS[@]}."
+    fi
+
+    record="${LEGACY_INCLUDE_RECORDS[0]}"
+    IFS='|' read -r include_file include_line include_spec include_kind <<< "${record}"
+
+    include_file_id="$(readlink -f -- "${include_file}" 2>/dev/null || printf '%s' "${include_file}")"
+    printer_cfg_id="$(readlink -f -- "${PRINTER_CFG}" 2>/dev/null || printf '%s' "${PRINTER_CFG}")"
+
+    if [[ "${include_file_id}" != "${printer_cfg_id}" ]]; then
+        error "The legacy Eddy layout is loaded from ${include_file}:${include_line}"
+        die "This rough draft only auto-migrates legacy includes located directly in printer.cfg. Keep the existing layout for now."
+    fi
+
+    legacy_cfg_has_wizard_includes \
+        || die "${LEGACY_EDDY_CFG} does not contain the expected Eddy Wizard macro/setup includes. Automatic migration was stopped."
+
+    info "Legacy migration preflight passed."
+    info "Source config: ${LEGACY_EDDY_CFG}"
+    info "New config:    ${DST_EDDY}"
+    info "Include:       ${include_file}:${include_line} -> [include ${include_spec}]"
+    if [[ "${include_kind}" == "glob" ]]; then
+        info "The legacy include is a wildcard and will be replaced with [include eddy.cfg]."
+    fi
+
+    return 0
+}
+
+rewrite_legacy_include_to_flat() {
+    local record="${LEGACY_INCLUDE_RECORDS[0]}"
+    local include_file=""
+    local include_line=""
+    local include_spec=""
+    local include_kind=""
+    local tmp_cfg
+
+    IFS='|' read -r include_file include_line include_spec include_kind <<< "${record}"
+
+    backup_path "${include_file}" "printer.cfg.before_legacy_eddy_migration"
+    tmp_cfg="$(mktemp)"
+
+    awk -v target_line="${include_line}" '
+        NR == target_line {
+            print "[include eddy.cfg]"
+            next
+        }
+        { print }
+    ' "${include_file}" > "${tmp_cfg}"
+
+    cat "${tmp_cfg}" > "${include_file}"
+    rm -f -- "${tmp_cfg}"
+
+    ok "Replaced legacy [include ${include_spec}] with [include eddy.cfg]."
+}
+
+prepare_legacy_layout_migration() {
+    local tmp_cfg
+
+    legacy_migration_preflight
+
+    printf '\n%sMigrating legacy Eddy Tap Wizard layout...%s\n' "${BOLD}" "${RESET}"
+
+    # Back up the entire nested directory before any migration changes.
+    backup_path "${LEGACY_EDDY_DIR}" "legacy_eddy_directory"
+
+    # Copy the user-owned configuration as a real file, not a symlink.
+    tmp_cfg="$(mktemp)"
+    cp -L -- "${LEGACY_EDDY_CFG}" "${tmp_cfg}"
+
+    if grep -nE '^[[:space:]]*[^#[:space:]].*\{\{[A-Z0-9_]+\}\}' "${tmp_cfg}" >/dev/null 2>&1; then
+        rm -f -- "${tmp_cfg}"
+        die "Legacy eddy.cfg unexpectedly contains unresolved active template placeholders. Migration stopped."
+    fi
+
+    cp -- "${tmp_cfg}" "${DST_EDDY}"
+    chmod 0644 "${DST_EDDY}" 2>/dev/null || true
+    rm -f -- "${tmp_cfg}"
+
+    ok "Copied user-owned Eddy configuration to: ${DST_EDDY}"
+
+    rewrite_legacy_include_to_flat
+
+    LEGACY_MIGRATION_CLEANUP_PENDING=1
+    CONFIG_MODE="legacy_migrated"
+
+    # The old directory remains in place until the new flat configuration,
+    # symlinks, and active include tree have all been validated.
+    rebuild_cfg_tree
+}
+
+finalize_legacy_layout_migration() {
+    local root_eddy_id=""
+    local legacy_eddy_id=""
+
+    [[ "${LEGACY_MIGRATION_CLEANUP_PENDING}" -eq 1 ]] || return 0
+
+    rebuild_cfg_tree
+
+    if ! path_is_active "${DST_EDDY}"; then
+        warn "New flat eddy.cfg is not active. The legacy directory will NOT be removed."
+        return 1
+    fi
+
+    if ! path_is_active "${DST_MACROS}" || ! path_is_active "${DST_WIZARD}"; then
+        warn "New flat Eddy Wizard files are not both active. The legacy directory will NOT be removed."
+        return 1
+    fi
+
+    if path_is_active "${LEGACY_EDDY_CFG}" \
+        || path_is_active "${LEGACY_MACROS}" \
+        || path_is_active "${LEGACY_WIZARD}"; then
+        warn "One or more legacy nested Eddy files are still active. The legacy directory will NOT be removed."
+        return 1
+    fi
+
+    if [[ -d "${LEGACY_EDDY_DIR}" ]]; then
+        rm -rf -- "${LEGACY_EDDY_DIR}"
+        ok "Removed the inactive legacy directory: ${LEGACY_EDDY_DIR}"
+        info "A complete copy is preserved in: ${BACKUP_DIR}/legacy_eddy_directory"
+    fi
+
+    LEGACY_MIGRATION_CLEANUP_PENDING=0
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Choose installation mode from discovered state
 # ---------------------------------------------------------------------------
 
@@ -926,6 +1267,32 @@ case "${EDDY_STATE}" in
     wizard)
         CONFIG_MODE="generated"
         ok "Existing ${DST_EDDY} will be preserved exactly as-is."
+        ;;
+    legacy_wizard)
+        printf '\n'
+        info "The previous nested Eddy Tap Wizard layout is active."
+        printf 'Choose how to continue:\n'
+        printf '  1) Keep the existing config/eddy/ layout\n'
+        printf '  2) Migrate to the new flat config/ layout\n'
+
+        if [[ "${AUTO_YES}" -eq 1 || ! -t 0 ]]; then
+            legacy_choice=1
+            info "Non-interactive/--yes mode: keeping the existing legacy layout."
+        else
+            ask_choice "Legacy layout action" "1" "1" "2"
+            legacy_choice="${ANSWER}"
+        fi
+
+        if [[ "${legacy_choice}" -eq 1 ]]; then
+            CONFIG_MODE="legacy_keep"
+            ACTIVE_DST_MACROS="${LEGACY_MACROS}"
+            ACTIVE_DST_WIZARD="${LEGACY_WIZARD}"
+            ok "The existing nested Eddy configuration will remain in place."
+        else
+            prepare_legacy_layout_migration
+            ACTIVE_DST_MACROS="${DST_MACROS}"
+            ACTIVE_DST_WIZARD="${DST_WIZARD}"
+        fi
         ;;
     btt_native)
         CONFIG_MODE="existing_native"
@@ -996,8 +1363,8 @@ install_cfg_link() {
 
 printf '\n%sInstalling wizard configuration files...%s\n' "${BOLD}" "${RESET}"
 
-install_cfg_link "${SRC_MACROS}" "${DST_MACROS}" "eddy_macros.cfg"
-install_cfg_link "${SRC_WIZARD}" "${DST_WIZARD}" "eddy_setup_wizard.cfg"
+install_cfg_link "${SRC_MACROS}" "${ACTIVE_DST_MACROS}" "eddy_macros.cfg"
+install_cfg_link "${SRC_WIZARD}" "${ACTIVE_DST_WIZARD}" "eddy_setup_wizard.cfg"
 
 # ---------------------------------------------------------------------------
 # Include management
@@ -1248,8 +1615,8 @@ ensure_direct_wizard_includes() {
     rebuild_cfg_tree
 }
 
-if [[ "${CONFIG_MODE}" == "generated" ]]; then
-    [[ -f "${DST_EDDY}" ]] || die "Generated-mode installation selected but ${DST_EDDY} does not exist."
+if [[ "${CONFIG_MODE}" == "generated" || "${CONFIG_MODE}" == "legacy_migrated" ]]; then
+    [[ -f "${DST_EDDY}" ]] || die "Flat-layout installation selected but ${DST_EDDY} does not exist."
     ensure_generated_eddy_include
 elif [[ "${CONFIG_MODE}" == "existing_eddy_file" ]]; then
     [[ -f "${DST_EDDY}" ]] || die "Existing-eddy-file mode selected but ${DST_EDDY} does not exist."
@@ -1257,6 +1624,14 @@ elif [[ "${CONFIG_MODE}" == "existing_eddy_file" ]]; then
     # Because this was not generated from our template, do not assume it
     # contains the wizard includes. Ensure them independently.
     ensure_direct_wizard_includes
+elif [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
+    # The nested eddy.cfg already loads the nested Wizard files. Confirm that
+    # they remain active, but do not rewrite any include paths.
+    rebuild_cfg_tree
+    path_is_active "${LEGACY_EDDY_CFG}"         || die "Legacy Eddy config unexpectedly became inactive."
+    path_is_active "${LEGACY_WIZARD}"         || die "Legacy Eddy setup wizard unexpectedly became inactive."
+    path_is_active "${LEGACY_MACROS}"         || die "Legacy Eddy macros unexpectedly became inactive."
+    ok "Legacy nested Wizard include structure preserved."
 else
     ensure_direct_wizard_includes
 fi
@@ -1391,6 +1766,11 @@ else
     fi
 fi
 
+# Complete legacy cleanup only after the new flat files and include tree exist.
+if [[ "${CONFIG_MODE}" == "legacy_migrated" ]]; then
+    finalize_legacy_layout_migration         || die "Legacy migration could not be finalized safely. The legacy directory was left in place."
+fi
+
 # ---------------------------------------------------------------------------
 # Final checks
 # ---------------------------------------------------------------------------
@@ -1401,16 +1781,16 @@ scan_eddy_sections
 printf '\n%sInstallation summary%s\n' "${BOLD}" "${RESET}"
 printf '%s\n' "------------------------------------------------------------"
 
-if [[ -L "${DST_MACROS}" ]]; then
-    ok "eddy_macros.cfg installed."
+if [[ -L "${ACTIVE_DST_MACROS}" ]]; then
+    ok "eddy_macros.cfg installed: ${ACTIVE_DST_MACROS}"
 else
-    warn "eddy_macros.cfg is not a symlink."
+    warn "eddy_macros.cfg is not a symlink at ${ACTIVE_DST_MACROS}."
 fi
 
-if [[ -L "${DST_WIZARD}" ]]; then
-    ok "eddy_setup_wizard.cfg installed."
+if [[ -L "${ACTIVE_DST_WIZARD}" ]]; then
+    ok "eddy_setup_wizard.cfg installed: ${ACTIVE_DST_WIZARD}"
 else
-    warn "eddy_setup_wizard.cfg is not a symlink."
+    warn "eddy_setup_wizard.cfg is not a symlink at ${ACTIVE_DST_WIZARD}."
 fi
 
 if [[ "${CONFIG_MODE}" == "generated" ]]; then
@@ -1424,6 +1804,32 @@ if [[ "${CONFIG_MODE}" == "generated" ]]; then
         ok "[include eddy.cfg] detected."
     else
         warn "[include eddy.cfg] was not detected."
+    fi
+elif [[ "${CONFIG_MODE}" == "legacy_migrated" ]]; then
+    ok "Legacy nested Eddy Tap Wizard layout migrated to the flat config layout."
+    ok "User-owned Eddy config: ${DST_EDDY}"
+
+    if [[ ! -d "${LEGACY_EDDY_DIR}" ]]; then
+        ok "Legacy config/eddy/ directory is no longer present."
+    else
+        warn "Legacy config/eddy/ directory still exists."
+    fi
+
+    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$'; then
+        ok "[include eddy.cfg] detected."
+    else
+        warn "[include eddy.cfg] was not detected."
+    fi
+elif [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
+    ok "Legacy nested Eddy Tap Wizard layout preserved."
+    ok "User-owned Eddy config: ${LEGACY_EDDY_CFG}"
+
+    if path_is_active "${LEGACY_EDDY_CFG}" \
+        && path_is_active "${LEGACY_WIZARD}" \
+        && path_is_active "${LEGACY_MACROS}"; then
+        ok "Legacy Eddy config, Wizard, and macros remain active."
+    else
+        warn "One or more legacy Eddy files are not active."
     fi
 elif [[ "${CONFIG_MODE}" == "existing_eddy_file" ]]; then
     ok "Pre-existing user-owned eddy.cfg preserved and activated."
