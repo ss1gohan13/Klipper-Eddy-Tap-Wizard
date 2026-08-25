@@ -6,6 +6,7 @@
 
 [include eddy_setup_wizard.cfg]
 [include eddy_macros.cfg]
+[include eddy_clear_calibration.cfg]
 
 #####################################################################
 # Eddy MCU
