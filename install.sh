@@ -104,22 +104,6 @@ ACTIVE_DST_WIZARD="${DST_WIZARD}"
 LEGACY_MIGRATION_CLEANUP_PENDING=0
 FRESH_EDDY_CFG_GENERATED=0
 
-printf '\n%sChecking Klipper gcode_shell_command.py...%s\n' "${BOLD}" "${RESET}"
-
-if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
-    ok "Klipper gcode_shell_command.py is already installed."
-else
-    info "Required gcode_shell_command.py was not found. Installing it automatically..."
-
-    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
-        || die "Failed to install required gcode_shell_command.py."
-
-    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
-        || die "gcode_shell_command.py installation verification failed."
-
-    ok "Installed required Klipper gcode_shell_command.py."
-fi
-
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
