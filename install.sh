@@ -1321,7 +1321,7 @@ replace_placeholder() {
 }
 
 render_clear_calibration_cfg() {
-    local dst_clear="${1:-"${dst_clear}"
+    local dst_clear="${1:-${DST_CLEAR}}"
     local tmp_clear
     local escaped_script
 
@@ -1329,7 +1329,7 @@ render_clear_calibration_cfg() {
 
     # 4B-4 only creates a missing rendered config.
     # Existing-file update/ownership behavior will be handled separately.
-    if [[ -e "${dst_clear}" || -L "${DST_CLEAR}" ]]; then
+    if [[ -e "${dst_clear}" || -L "${dst_clear}" ]]; then
         [[ -f "${dst_clear}" ]] \
             || die "Existing clear-calibration path is not a regular file: ${dst_clear}"
 
