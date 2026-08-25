@@ -1290,6 +1290,14 @@ fi
 
 # Incompatible states stop before any printer/Klipper files are modified.
 case "${EDDY_STATE}" in
+    btt_native)
+        printf '\n'
+        warn "A legacy BIGTREETECH-style Eddy configuration was detected."
+        warn "This configuration is not currently supported by the Klipper Eddy Tap Wizard."
+        warn "Automatic conversion to the required native Eddy Tap configuration is not currently supported."
+        warn "No printer configuration or Klipper files have been changed."
+        exit 0
+        ;;
     eddy_ng)
         printf '\n'
         warn "The Eddy Tap Wizard requires Klipper's native [probe_eddy_current] implementation."
