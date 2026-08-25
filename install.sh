@@ -55,6 +55,7 @@ SRC_WIZARD="${SCRIPT_DIR}/printer_data/config/eddy_setup_wizard.cfg"
 SRC_TEMPLATE_FULL="${SCRIPT_DIR}/printer_data/config/templates/eddy.cfg.template"
 SRC_TEMPLATE_MINIMAL="${SCRIPT_DIR}/printer_data/config/templates/eddy-minimal.cfg.template"
 SRC_CLEAR_TEMPLATE="${SCRIPT_DIR}/printer_data/config/templates/eddy_clear_calibration.cfg.template"
+SRC_GCODE_SHELL_COMMAND="${SCRIPT_DIR}/klipper/klippy/extras/gcode_shell_command.py"
 SRC_CLEAR_SCRIPT="${SCRIPT_DIR}/scripts/clear_eddy_calibration.py"
 SRC_TEMP_PROBE="${SCRIPT_DIR}/klipper/klippy/extras/temperature_probe.py"
 
@@ -71,6 +72,7 @@ LEGACY_WIZARD="${LEGACY_EDDY_DIR}/eddy_setup_wizard.cfg"
 LEGACY_CLEAR="${LEGACY_EDDY_DIR}/eddy_clear_calibration.cfg"
 
 DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
+GCODE_SHELL_COMMAND="${KLIPPER_EXTRAS_DIR}/gcode_shell_command.py"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 
 STATE_DIR="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/${PROJECT_SLUG}"
@@ -314,6 +316,8 @@ command -v sed >/dev/null 2>&1 || die "sed is required but was not found."
 # In detect-only mode the repository payload does not need to be complete.
 if [[ "${DETECT_ONLY}" -eq 0 ]]; then
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
+    [[ -f "${GCODE_SHELL_COMMAND}" ]] \
+        || die "The gcode_shell_command Klipper extension is required for EDDY_CLEAR_CALIBRATION but was not found: ${GCODE_SHELL_COMMAND}"
 
     [[ -f "${SRC_MACROS}" ]] || die "Repository file missing: ${SRC_MACROS}"
     [[ -f "${SRC_WIZARD}" ]] || die "Repository file missing: ${SRC_WIZARD}"
