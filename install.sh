@@ -2,7 +2,7 @@
 #
 # Klipper Eddy Tap Wizard Installer
 #
-# This version extends the existing installer with:
+# This installer provides:
 #   - active Klipper config-tree discovery
 #   - native Eddy / BTT-style Eddy / Eddy-NG detection
 #   - legacy nested Eddy Tap Wizard layout detection/migration
@@ -11,17 +11,11 @@
 #   - preservation of an existing user-owned eddy.cfg
 #   - required [bed_mesh] zero_reference_position validation/setup
 #   - [include eddy.cfg] management for generated configurations
-#   - compatibility with existing native Eddy configurations
+#   - compatibility with existing mainline native Eddy configurations
 #   - safe migration of the old installer-managed direct include block
+#   - portable Eddy clear-calibration configuration management
+#   - safe management of required Klipper Python extras
 #   - an advisory Eddy USB firmware/identity check
-#
-# Existing behavior retained:
-#   - eddy_macros.cfg and eddy_setup_wizard.cfg are repo-managed symlinks
-#   - temperature_probe.py is copied and hash-managed
-#   - [save_variables] is detected/added
-#   - backups are created before config changes
-#   - --update pulls the currently checked-out branch
-#   - Klipper is restarted at the end of a successful install
 #
 # IMPORTANT:
 #   eddy.cfg is USER-OWNED once generated. Normal updates never regenerate or
@@ -48,7 +42,6 @@ PRINTER_DATA_DIR="${PRINTER_DATA_DIR:-${HOME_DIR}/printer_data}"
 CONFIG_DIR="${CONFIG_DIR:-${PRINTER_DATA_DIR}/config}"
 KLIPPER_DIR="${KLIPPER_DIR:-${HOME_DIR}/klipper}"
 KLIPPER_EXTRAS_DIR="${KLIPPER_EXTRAS_DIR:-${KLIPPER_DIR}/klippy/extras}"
-KLIPPY_LOG="${PRINTER_DATA_DIR}/logs/klippy.log"
 
 SRC_MACROS="${SCRIPT_DIR}/printer_data/config/eddy_macros.cfg"
 SRC_WIZARD="${SCRIPT_DIR}/printer_data/config/eddy_setup_wizard.cfg"
@@ -134,7 +127,7 @@ die() {
 }
 
 usage() {
-    cat <<'EOF'
+    cat <<'EOF_USAGE'
 Klipper Eddy Tap Wizard Installer
 
 Usage:
@@ -159,21 +152,28 @@ Environment overrides:
 Recommended update command:
   ./install.sh --update
 
+Supported installation paths:
+  - fresh mainline/native Eddy configuration using Full or Minimal templates
+  - existing mainline/native [probe_eddy_current ...] configurations
+  - previous Eddy Tap Wizard nested config/eddy/ layouts
+  - USB or CAN Eddy connections for freshly generated eddy.cfg files
+
+Unsupported configurations are detected and stopped before printer/Klipper
+files are modified, including Eddy-NG and legacy BIGTREETECH/Rappetor-style
+Eddy configurations.
+
 The installer:
   - discovers the active Klipper config tree starting at printer.cfg
-  - detects native Eddy, BTT-style Eddy, Eddy-NG, legacy nested Wizard layouts,
-    and common conflicts
-  - generates ~/printer_data/config/eddy.cfg from a Full or Minimal template
-    on a fresh setup
-  - can safely migrate the old config/eddy/ Wizard layout to flat config/ files
-  - never regenerates or replaces an existing flat eddy.cfg during normal updates
+  - preserves an existing user-owned eddy.cfg during normal installs/updates
   - validates/prompts for the required [bed_mesh] zero_reference_position
-  - symlinks eddy_macros.cfg and eddy_setup_wizard.cfg into printer_data/config
-  - backs up files before replacing/modifying them
+  - installs/updates eddy_macros.cfg and eddy_setup_wizard.cfg as repo symlinks
+  - renders and activates eddy_clear_calibration.cfg
   - checks/adds [save_variables] when required and none exists
+  - safely manages the required gcode_shell_command.py dependency
   - safely manages the project's modified temperature_probe.py
+  - creates backups before managed config/Python replacements
   - restarts Klipper after a successful installation
-EOF
+EOF_USAGE
 }
 
 ask_yes_no() {
@@ -312,14 +312,17 @@ command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required but was not f
 command -v grep >/dev/null 2>&1 || die "grep is required but was not found."
 command -v awk >/dev/null 2>&1 || die "awk is required but was not found."
 command -v sed >/dev/null 2>&1 || die "sed is required but was not found."
+command -v readlink >/dev/null 2>&1 || die "readlink is required but was not found."
 
 [[ -d "${CONFIG_DIR}" ]] || die "Klipper config directory not found: ${CONFIG_DIR}"
 [[ -f "${PRINTER_CFG}" ]] || die "printer.cfg not found: ${PRINTER_CFG}"
 
 # In detect-only mode the repository payload does not need to be complete.
 if [[ "${DETECT_ONLY}" -eq 0 ]]; then
+    command -v mktemp >/dev/null 2>&1 || die "mktemp is required but was not found."
+    [[ -x /usr/bin/python3 ]] || die "/usr/bin/python3 is required by the Eddy clear-calibration helper."
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
-    
+
     [[ -f "${SRC_MACROS}" ]] || die "Repository file missing: ${SRC_MACROS}"
     [[ -f "${SRC_WIZARD}" ]] || die "Repository file missing: ${SRC_WIZARD}"
     [[ -f "${SRC_TEMPLATE_FULL}" ]] || die "Repository file missing: ${SRC_TEMPLATE_FULL}"
@@ -328,6 +331,25 @@ if [[ "${DETECT_ONLY}" -eq 0 ]]; then
     [[ -f "${SRC_CLEAR_SCRIPT}" ]] || die "Repository file missing: ${SRC_CLEAR_SCRIPT}"
     [[ -f "${SRC_TEMP_PROBE}" ]] || die "Repository file missing: ${SRC_TEMP_PROBE}"
     [[ -f "${SRC_GCODE_SHELL_COMMAND}" ]] || die "Repository file missing: ${SRC_GCODE_SHELL_COMMAND}"
+
+    # Validate the core repository payload before modifying the user's install.
+    for template in "${SRC_TEMPLATE_FULL}" "${SRC_TEMPLATE_MINIMAL}"; do
+        grep -Eq '^[[:space:]]*\[include[[:space:]]+eddy_setup_wizard\.cfg\]' "${template}" \
+            || die "Repository template is missing [include eddy_setup_wizard.cfg]: ${template}"
+        grep -Eq '^[[:space:]]*\[include[[:space:]]+eddy_macros\.cfg\]' "${template}" \
+            || die "Repository template is missing [include eddy_macros.cfg]: ${template}"
+        grep -Eq '^[[:space:]]*\[include[[:space:]]+eddy_clear_calibration\.cfg\]' "${template}" \
+            || die "Repository template is missing [include eddy_clear_calibration.cfg]: ${template}"
+    done
+
+    grep -Fq '__EDDY_CLEAR_SCRIPT__' "${SRC_CLEAR_TEMPLATE}" \
+        || die "Repository clear-calibration template is missing __EDDY_CLEAR_SCRIPT__."
+    grep -Fq 'RUN_SHELL_COMMAND' "${SRC_GCODE_SHELL_COMMAND}" \
+        || die "Repository gcode_shell_command.py does not provide RUN_SHELL_COMMAND."
+    grep -Fq 'def load_config_prefix' "${SRC_GCODE_SHELL_COMMAND}" \
+        || die "Repository gcode_shell_command.py is missing load_config_prefix()."
+    grep -Fq '"--probe"' "${SRC_CLEAR_SCRIPT}" \
+        || die "Repository clear_eddy_calibration.py is missing its required --probe argument."
 
     # Verify this looks like the expected patched temperature_probe.py.
     grep -Fq 'TAP_START_Z = 5.' "${SRC_TEMP_PROBE}" \
@@ -508,7 +530,6 @@ declare -a LEGACY_EXTRA_ACTIVE_FILES=()
 EDDY_STATE="none"
 BTT_STYLE=0
 LEGACY_WIZARD_DETECTED=0
-LEGACY_INCLUDE_USES_GLOB=0
 
 scan_legacy_include_references() {
     local target_id=""
@@ -526,7 +547,6 @@ scan_legacy_include_references() {
     local -a matches=()
 
     LEGACY_INCLUDE_RECORDS=()
-    LEGACY_INCLUDE_USES_GLOB=0
 
     [[ -e "${LEGACY_EDDY_CFG}" || -L "${LEGACY_EDDY_CFG}" ]] || return 0
     target_id="$(readlink -f -- "${LEGACY_EDDY_CFG}" 2>/dev/null || printf '%s' "${LEGACY_EDDY_CFG}")"
@@ -563,7 +583,6 @@ scan_legacy_include_references() {
 
                         if [[ "${candidate_id}" == "${target_id}" ]]; then
                             LEGACY_INCLUDE_RECORDS+=("${file}|${line_no}|${include_spec}|${include_kind}")
-                            LEGACY_INCLUDE_USES_GLOB=1
                             break
                         fi
                     done
@@ -640,7 +659,6 @@ scan_eddy_sections() {
     LEGACY_WIZARD_DETECTED=0
     LEGACY_INCLUDE_RECORDS=()
     LEGACY_EXTRA_ACTIVE_FILES=()
-    LEGACY_INCLUDE_USES_GLOB=0
 
     for file in "${ACTIVE_CFG_FILES[@]}"; do
         while IFS= read -r result; do
@@ -674,7 +692,6 @@ scan_eddy_sections() {
     elif (( ${#EDDY_NG_RECORDS[@]} > 1 )); then
         EDDY_STATE="conflict"
     elif (( ${#NATIVE_EDDY_RECORDS[@]} > 1 )); then
-        # The published wizard currently expects one native Eddy probe.
         EDDY_STATE="conflict"
     elif (( ${#EDDY_NG_RECORDS[@]} == 1 )); then
         EDDY_STATE="eddy_ng"
@@ -857,9 +874,6 @@ check_eddy_usb_identity() {
         warn "This may still be valid if the device uses a custom USB descriptor."
     fi
 
-    # BTT's current guide specifically warns about the RP2040 flash-chip
-    # CLKDIV 4 build option. That compile-time selection is not exposed by a
-    # normal Klipper runtime identity, so the installer can only warn.
     info "Runtime detection cannot verify BTT's RP2040 flash-chip CLKDIV 4 build setting."
 }
 
@@ -924,6 +938,8 @@ parse_xy_pair() {
     local second=""
     local extra=""
 
+    # temperature_probe calibration_position may contain a third coordinate;
+    # only X/Y are needed for the zero-reference recommendation.
     IFS=',' read -r first second extra <<< "${raw}"
     first="$(trim "${first:-}")"
     second="$(trim "${second:-}")"
@@ -970,8 +986,6 @@ scan_calibration_reference() {
     local result
     local line_no
     local probe_name=""
-    local record=""
-    local raw=""
 
     BED_MESH_RECORDS=()
     TEMP_PROBE_RECORDS=()
@@ -990,7 +1004,6 @@ scan_calibration_reference() {
     TEMP_CAL_RECOMMEND_X=""
     TEMP_CAL_RECOMMEND_Y=""
 
-    # Locate the active [bed_mesh] section and the file that owns it.
     for file in "${ACTIVE_CFG_FILES[@]}"; do
         while IFS= read -r result; do
             [[ -n "${result}" ]] || continue
@@ -1010,9 +1023,6 @@ scan_calibration_reference() {
         fi
     fi
 
-    # If a single native Eddy probe exists, look for a matching
-    # [temperature_probe <name>] calibration_position. Its X/Y position is a
-    # useful recommendation, but it is never silently imposed on the user.
     if (( ${#NATIVE_EDDY_RECORDS[@]} == 1 )); then
         IFS='|' read -r _ _ probe_name <<< "${NATIVE_EDDY_RECORDS[0]}"
 
@@ -1038,6 +1048,8 @@ scan_calibration_reference() {
 }
 
 report_calibration_reference() {
+    local record
+
     printf '\n%sEddy calibration reference%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
 
@@ -1171,31 +1183,22 @@ ensure_calibration_reference() {
 
     if [[ "${TEMP_CAL_RECOMMEND_VALID}" -eq 1 ]]; then
         info "Recommended from temperature calibration: X${TEMP_CAL_RECOMMEND_X} Y${TEMP_CAL_RECOMMEND_Y}"
-
-        # If no valid existing zero reference is present, use the matching
-        # temperature calibration_position as the suggested input default.
         if [[ -z "${default_x}" || -z "${default_y}" ]]; then
             default_x="${TEMP_CAL_RECOMMEND_X}"
             default_y="${TEMP_CAL_RECOMMEND_Y}"
         fi
     fi
 
-    # Fresh template generation already required the user to enter this value
-    # as Zero reference X/Y. Do not ask the same question twice.
     if [[ "${FRESH_EDDY_CFG_GENERATED}" -eq 1 && "${BED_MESH_ZERO_VALID}" -eq 1 ]]; then
         ok "Fresh template already contains the confirmed zero reference position."
         return 0
     fi
 
-    # A normal ./install.sh --update should not repeatedly ask the user to
-    # reconfirm geometry that is already valid. Missing/invalid values still
-    # require interactive input even during an update.
     if [[ "${AFTER_PULL}" -eq 1 && "${BED_MESH_ZERO_VALID}" -eq 1 ]]; then
         ok "Update mode: preserving existing zero_reference_position."
         return 0
     fi
 
-    # Non-interactive installs cannot invent or reconfirm printer geometry.
     if [[ ! -t 0 ]]; then
         if [[ "${BED_MESH_ZERO_VALID}" -eq 1 ]]; then
             ok "Non-interactive mode: preserving existing zero_reference_position."
@@ -1281,18 +1284,11 @@ if [[ "${DETECT_ONLY}" -eq 1 ]]; then
     exit 0
 fi
 
-if [[ "${LEGACY_BTT_KLIPPER}" -eq 1 ]]; then
-    warn "The Eddy Tap Wizard should be installed against mainline Klipper."
-    if ! ask_yes_no "Continue anyway despite the detected BIGTREETECH Klipper fork?" "n"; then
-        die "Installation stopped. Migrate Klipper to mainline and rerun the installer."
-    fi
-fi
-
-# Incompatible states stop before any printer/Klipper files are modified.
+# Incompatible Eddy states stop before any printer/Klipper files are modified.
 case "${EDDY_STATE}" in
     btt_native)
         printf '\n'
-        warn "A legacy BIGTREETECH-style Eddy configuration was detected."
+        warn "A legacy BIGTREETECH/Rappetor-style Eddy configuration was detected."
         warn "This configuration is not currently supported by the Klipper Eddy Tap Wizard."
         warn "Automatic conversion to the required native Eddy Tap configuration is not currently supported."
         warn "No printer configuration or Klipper files have been changed."
@@ -1301,7 +1297,7 @@ case "${EDDY_STATE}" in
     eddy_ng)
         printf '\n'
         warn "The Eddy Tap Wizard requires Klipper's native [probe_eddy_current] implementation."
-        warn "Automatic Eddy-NG migration is intentionally NOT implemented in this version."
+        warn "Automatic Eddy-NG migration is not currently supported."
         warn "No printer configuration or Klipper files have been changed."
         exit 0
         ;;
@@ -1312,6 +1308,15 @@ case "${EDDY_STATE}" in
         exit 0
         ;;
 esac
+
+# A legacy BIGTREETECH Klipper fork may still be paired with a non-BTT-style
+# native Eddy config. Require an explicit opt-in before continuing in that case.
+if [[ "${LEGACY_BTT_KLIPPER}" -eq 1 ]]; then
+    warn "The Eddy Tap Wizard should be installed against mainline Klipper."
+    if ! ask_yes_no "Continue anyway despite the detected BIGTREETECH Klipper fork?" "n"; then
+        die "Installation stopped. Migrate Klipper to mainline and rerun the installer."
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Template rendering
@@ -1343,9 +1348,6 @@ render_clear_calibration_cfg() {
     printf '\n%sPreparing Eddy clear-calibration configuration...%s\n' "${BOLD}" "${RESET}"
 
     mkdir -p "${STATE_DIR}"
-
-    # Always render the current desired version first. This lets us determine
-    # whether an installed copy is current, managed-and-outdated, or external.
     tmp_clear="$(mktemp)"
 
     cp -a -- "${SRC_CLEAR_TEMPLATE}" "${tmp_clear}" \
@@ -1380,8 +1382,6 @@ render_clear_calibration_cfg() {
         previous_hash="$(tr -d '[:space:]' < "${hash_file}")"
     fi
 
-    # We never create this file as a symlink. Preserve foreign symlinks rather
-    # than following them and potentially modifying another file unexpectedly.
     if [[ -L "${dst_clear}" ]]; then
         if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${dst_clear}" 2>/dev/null; then
             rm -f -- "${tmp_clear}"
@@ -1396,7 +1396,6 @@ render_clear_calibration_cfg() {
         return 0
     fi
 
-    # Missing file: install and begin managing it.
     if [[ ! -e "${dst_clear}" ]]; then
         cp -- "${tmp_clear}" "${dst_clear}" \
             || {
@@ -1405,7 +1404,6 @@ render_clear_calibration_cfg() {
             }
 
         chmod 0644 "${dst_clear}" 2>/dev/null || true
-
         printf '%s\n' "${desired_hash}" > "${hash_file}"
         rm -f -- "${tmp_clear}"
 
@@ -1429,8 +1427,6 @@ render_clear_calibration_cfg() {
 
     existing_hash="$(sha256sum "${dst_clear}" | awk '{print $1}')"
 
-    # Existing file exactly matches what we would generate now.
-    # Record ownership even if it predates the hash-management feature.
     if [[ "${existing_hash}" == "${desired_hash}" ]]; then
         printf '%s\n' "${desired_hash}" > "${hash_file}"
         rm -f -- "${tmp_clear}"
@@ -1439,8 +1435,6 @@ render_clear_calibration_cfg() {
         return 0
     fi
 
-    # The destination still matches the last version that we installed.
-    # Therefore it has not been modified externally and can be safely updated.
     if [[ -n "${previous_hash}" && "${existing_hash}" == "${previous_hash}" ]]; then
         if [[ "${dst_clear}" == "${LEGACY_CLEAR}" ]]; then
             backup_label="eddy_clear_calibration.cfg.before_managed_update.legacy"
@@ -1471,8 +1465,6 @@ render_clear_calibration_cfg() {
         return 0
     fi
 
-    # The file differs from both our desired version and the last copy we
-    # installed. Treat it as user/external content and relinquish ownership.
     rm -f -- "${hash_file}"
     rm -f -- "${tmp_clear}"
 
@@ -1612,7 +1604,6 @@ generate_eddy_cfg() {
 
     if [[ "${connection_choice}" -eq 1 ]]; then
         replace_placeholder "${tmp_cfg}" "EDDY_SERIAL" "${serial_value}"
-        # Leave the CAN placeholder commented for reference.
     else
         replace_placeholder "${tmp_cfg}" "EDDY_CANBUS_UUID" "${can_uuid}"
 
@@ -1630,6 +1621,29 @@ generate_eddy_cfg() {
         die "Template rendering failed."
     fi
 
+    # Verify that exactly the selected transport is active after rendering.
+    if [[ "${connection_choice}" -eq 1 ]]; then
+        grep -Fq "serial: ${serial_value}" "${tmp_cfg}" \
+            || {
+                rm -f -- "${tmp_cfg}"
+                die "Generated USB eddy.cfg does not contain the requested serial path."
+            }
+        if grep -Eq '^[[:space:]]*canbus_uuid[[:space:]]*:' "${tmp_cfg}"; then
+            rm -f -- "${tmp_cfg}"
+            die "Generated USB eddy.cfg unexpectedly contains an active canbus_uuid."
+        fi
+    else
+        grep -Fq "canbus_uuid: ${can_uuid}" "${tmp_cfg}" \
+            || {
+                rm -f -- "${tmp_cfg}"
+                die "Generated CAN eddy.cfg does not contain the requested CAN UUID."
+            }
+        if grep -Eq '^[[:space:]]*serial[[:space:]]*:' "${tmp_cfg}"; then
+            rm -f -- "${tmp_cfg}"
+            die "Generated CAN eddy.cfg unexpectedly contains an active serial path."
+        fi
+    fi
+
     if [[ -e "${DST_EDDY}" || -L "${DST_EDDY}" ]]; then
         rm -f -- "${tmp_cfg}"
         die "${DST_EDDY} appeared during generation. It will not be overwritten."
@@ -1638,6 +1652,8 @@ generate_eddy_cfg() {
     cp -- "${tmp_cfg}" "${DST_EDDY}"
     chmod 0644 "${DST_EDDY}" 2>/dev/null || true
     rm -f -- "${tmp_cfg}"
+
+    [[ -f "${DST_EDDY}" ]] || die "Generated eddy.cfg could not be verified after installation."
 
     FRESH_EDDY_CFG_GENERATED=1
     ok "Generated user-owned Eddy configuration: ${DST_EDDY}"
@@ -1672,6 +1688,13 @@ legacy_migration_preflight() {
         die "Cannot migrate automatically because ${DST_CLEAR} already exists. It will not be overwritten."
     fi
 
+    # eddy.cfg is user-owned. Do not silently dereference a custom symlink and
+    # turn it into a regular file during automatic migration.
+    if [[ -L "${LEGACY_EDDY_CFG}" ]]; then
+        warn "The legacy eddy.cfg is a symlink."
+        die "Automatic migration cannot safely preserve a symlinked legacy eddy.cfg. Keep the legacy layout or replace the symlink with a regular file before migrating."
+    fi
+
     if [[ -L "${LEGACY_CLEAR}" ]]; then
         warn "The legacy eddy_clear_calibration.cfg is a symlink."
         die "Automatic migration cannot safely preserve a symlinked legacy clear-calibration config. Keep the legacy layout or replace the symlink with a regular file before migrating."
@@ -1697,7 +1720,7 @@ legacy_migration_preflight() {
 
     if [[ "${include_file_id}" != "${printer_cfg_id}" ]]; then
         error "The legacy Eddy layout is loaded from ${include_file}:${include_line}"
-        die "This version only auto-migrates legacy includes located directly in printer.cfg. Keep the existing layout for now."
+        die "Automatic migration only supports legacy includes located directly in printer.cfg. Keep the existing layout for now."
     fi
 
     legacy_cfg_has_wizard_includes \
@@ -1748,12 +1771,10 @@ prepare_legacy_layout_migration() {
 
     printf '\n%sMigrating legacy Eddy Tap Wizard layout...%s\n' "${BOLD}" "${RESET}"
 
-    # Back up the entire nested directory before any migration changes.
     backup_path "${LEGACY_EDDY_DIR}" "legacy_eddy_directory"
 
-    # Copy the user-owned configuration as a real file, not a symlink.
     tmp_cfg="$(mktemp)"
-    cp -L -- "${LEGACY_EDDY_CFG}" "${tmp_cfg}"
+    cp -- "${LEGACY_EDDY_CFG}" "${tmp_cfg}"
 
     if grep -nE '^[[:space:]]*[^#[:space:]].*\{\{[A-Z0-9_]+\}\}' "${tmp_cfg}" >/dev/null 2>&1; then
         rm -f -- "${tmp_cfg}"
@@ -1766,27 +1787,23 @@ prepare_legacy_layout_migration() {
 
     ok "Copied user-owned Eddy configuration to: ${DST_EDDY}"
 
-    # Preserve the existing legacy clear-calibration configuration when moving
-    # from the nested layout to the flat layout.
-    if [[ -e "${LEGACY_CLEAR}" || -L "${LEGACY_CLEAR}" ]]; then
-        cp -L -- "${LEGACY_CLEAR}" "${DST_CLEAR}" \
+    # Preserve an existing legacy clear-calibration config and transfer its
+    # ownership record so the normal renderer can classify it safely.
+    if [[ -e "${LEGACY_CLEAR}" ]]; then
+        cp -- "${LEGACY_CLEAR}" "${DST_CLEAR}" \
             || die "Failed to migrate legacy eddy_clear_calibration.cfg."
-
         chmod 0644 "${DST_CLEAR}" 2>/dev/null || true
 
-    # Transfer the ownership record as well. The normal renderer that runs
-    # afterward will decide whether the copied file is current, safely
-    # updatable, or user-modified.
-    if [[ -f "${LEGACY_CLEAR_HASH_FILE}" ]]; then
-        mkdir -p "${STATE_DIR}"
-        cp -- "${LEGACY_CLEAR_HASH_FILE}" "${CLEAR_CFG_HASH_FILE}" \
-            || die "Failed to transfer clear-calibration ownership state."
-    else
-        rm -f -- "${CLEAR_CFG_HASH_FILE}"
-    fi
+        if [[ -f "${LEGACY_CLEAR_HASH_FILE}" ]]; then
+            mkdir -p "${STATE_DIR}"
+            cp -- "${LEGACY_CLEAR_HASH_FILE}" "${CLEAR_CFG_HASH_FILE}" \
+                || die "Failed to transfer clear-calibration ownership state."
+        else
+            rm -f -- "${CLEAR_CFG_HASH_FILE}"
+        fi
 
-    ok "Migrated legacy eddy_clear_calibration.cfg to: ${DST_CLEAR}"
-fi
+        ok "Migrated legacy eddy_clear_calibration.cfg to: ${DST_CLEAR}"
+    fi
 
     rewrite_legacy_include_to_flat
 
@@ -1799,9 +1816,6 @@ fi
 }
 
 finalize_legacy_layout_migration() {
-    local root_eddy_id=""
-    local legacy_eddy_id=""
-
     [[ "${LEGACY_MIGRATION_CLEANUP_PENDING}" -eq 1 ]] || return 0
 
     rebuild_cfg_tree
@@ -1830,12 +1844,8 @@ finalize_legacy_layout_migration() {
         info "A complete copy is preserved in: ${BACKUP_DIR}/legacy_eddy_directory"
     fi
 
-# The nested clear-calibration file no longer exists after a successful
-# migration, so its old ownership record is no longer relevant.
-rm -f -- "${LEGACY_CLEAR_HASH_FILE}"
-
-LEGACY_MIGRATION_CLEANUP_PENDING=0
-FRESH_EDDY_CFG_GENERATED=0
+    rm -f -- "${LEGACY_CLEAR_HASH_FILE}"
+    LEGACY_MIGRATION_CLEANUP_PENDING=0
     return 0
 }
 
@@ -1874,7 +1884,6 @@ case "${EDDY_STATE}" in
             ACTIVE_DST_WIZARD="${DST_WIZARD}"
         fi
         ;;
-    
     native)
         CONFIG_MODE="existing_native"
         printf '\n'
@@ -1940,6 +1949,11 @@ install_cfg_link() {
     fi
 
     ln -s -- "${src}" "${dst}"
+
+    [[ -L "${dst}" ]] || die "Failed to install ${label} symlink: ${dst}"
+    [[ "$(readlink -f -- "${dst}" 2>/dev/null || true)" == "$(readlink -f -- "${src}")" ]] \
+        || die "Installed ${label} symlink does not point to the expected repository file."
+
     ok "Installed ${label}: ${dst} -> ${src}"
 }
 
@@ -2061,9 +2075,6 @@ ensure_generated_eddy_include() {
         eddy_include_present=1
     fi
 
-    # A generated eddy.cfg already includes eddy_setup_wizard.cfg and
-    # eddy_macros.cfg. Any additional active direct includes would load those
-    # files twice and can create duplicate macro/section errors.
     mapfile -t duplicate_include_files < <(find_direct_wizard_include_files_excluding_eddy_cfg)
 
     if (( ${#duplicate_include_files[@]} > 0 )); then
@@ -2104,8 +2115,6 @@ ensure_generated_eddy_include() {
 
     rebuild_cfg_tree
 
-    # Final guard: no active direct wizard include may remain outside the
-    # generated eddy.cfg, because eddy.cfg already loads both files itself.
     mapfile -t duplicate_include_files < <(find_direct_wizard_include_files_excluding_eddy_cfg)
     if (( ${#duplicate_include_files[@]} > 0 )); then
         for file in "${duplicate_include_files[@]}"; do
@@ -2205,8 +2214,6 @@ ensure_clear_calibration_include() {
 
     rebuild_cfg_tree
 
-    # The file may already be loaded by a generated eddy.cfg template,
-    # a user-owned eddy.cfg, or another valid include path.
     if path_is_active "${DST_CLEAR}"; then
         ok "eddy_clear_calibration.cfg is already active in the Klipper config tree."
         return 0
@@ -2277,16 +2284,15 @@ if [[ "${CONFIG_MODE}" == "generated" || "${CONFIG_MODE}" == "legacy_migrated" ]
 elif [[ "${CONFIG_MODE}" == "existing_eddy_file" ]]; then
     [[ -f "${DST_EDDY}" ]] || die "Existing-eddy-file mode selected but ${DST_EDDY} does not exist."
     ensure_existing_eddy_file_include
-    # Because this was not generated from our template, do not assume it
-    # contains the wizard includes. Ensure them independently.
     ensure_direct_wizard_includes
 elif [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
-    # The nested eddy.cfg already loads the nested Wizard files. Confirm that
-    # they remain active, but do not rewrite any include paths.
     rebuild_cfg_tree
-    path_is_active "${LEGACY_EDDY_CFG}"         || die "Legacy Eddy config unexpectedly became inactive."
-    path_is_active "${LEGACY_WIZARD}"         || die "Legacy Eddy setup wizard unexpectedly became inactive."
-    path_is_active "${LEGACY_MACROS}"         || die "Legacy Eddy macros unexpectedly became inactive."
+    path_is_active "${LEGACY_EDDY_CFG}" \
+        || die "Legacy Eddy config unexpectedly became inactive."
+    path_is_active "${LEGACY_WIZARD}" \
+        || die "Legacy Eddy setup wizard unexpectedly became inactive."
+    path_is_active "${LEGACY_MACROS}" \
+        || die "Legacy Eddy macros unexpectedly became inactive."
     ok "Legacy nested Wizard include structure preserved."
 else
     ensure_direct_wizard_includes
@@ -2326,14 +2332,14 @@ else
         tmp_cfg="$(mktemp)"
 
         if grep -Fq '# <<< Klipper Eddy Tap Wizard <<<' "${PRINTER_CFG}"; then
-            awk '
+            awk -v save_file="${CONFIG_DIR}/saved_variables.cfg" '
                 {
                     print
                     if ($0 == "# <<< Klipper Eddy Tap Wizard <<<" && !inserted) {
                         print ""
                         print "# >>> Klipper Eddy Tap Wizard save_variables >>>"
                         print "[save_variables]"
-                        print "filename: ~/printer_data/config/saved_variables.cfg"
+                        print "filename: " save_file
                         print "# <<< Klipper Eddy Tap Wizard save_variables <<<"
                         print ""
                         inserted=1
@@ -2342,13 +2348,10 @@ else
             ' "${PRINTER_CFG}" > "${tmp_cfg}"
         else
             {
-                cat <<'EOF'
-# >>> Klipper Eddy Tap Wizard save_variables >>>
-[save_variables]
-filename: ~/printer_data/config/saved_variables.cfg
-# <<< Klipper Eddy Tap Wizard save_variables <<<
-
-EOF
+                printf '# >>> Klipper Eddy Tap Wizard save_variables >>>\n'
+                printf '[save_variables]\n'
+                printf 'filename: %s/saved_variables.cfg\n' "${CONFIG_DIR}"
+                printf '# <<< Klipper Eddy Tap Wizard save_variables <<<\n\n'
                 cat "${PRINTER_CFG}"
             } > "${tmp_cfg}"
         fi
@@ -2384,54 +2387,72 @@ src_gshell_hash="$(sha256sum "${SRC_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
 dst_gshell_hash=""
 previous_gshell_hash=""
 
-if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
-    dst_gshell_hash="$(sha256sum "${DST_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
-fi
+# Preserve user/foreign symlinks rather than silently taking ownership of the
+# file they point to. The target must still expose the required Klipper command.
+if [[ -L "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    rm -f -- "${GCODE_SHELL_HASH_FILE}"
 
-if [[ -f "${GCODE_SHELL_HASH_FILE}" ]]; then
-    previous_gshell_hash="$(tr -d '[:space:]' < "${GCODE_SHELL_HASH_FILE}")"
-fi
+    if [[ ! -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+        die "Existing gcode_shell_command.py symlink is broken: ${DST_GCODE_SHELL_COMMAND}"
+    fi
 
-if [[ -z "${dst_gshell_hash}" ]]; then
-    # gcode_shell_command.py is not installed. Install it silently.
-    info "Required gcode_shell_command.py was not found. Installing it automatically..."
+    grep -Fq 'RUN_SHELL_COMMAND' "${DST_GCODE_SHELL_COMMAND}" \
+        || die "Existing symlinked gcode_shell_command.py does not provide RUN_SHELL_COMMAND."
+    grep -Fq 'def load_config_prefix' "${DST_GCODE_SHELL_COMMAND}" \
+        || die "Existing symlinked gcode_shell_command.py does not provide load_config_prefix()."
 
-    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
-        || die "Failed to install required gcode_shell_command.py."
+    ok "Existing gcode_shell_command.py symlink detected."
+    info "The symlink is not managed by the Eddy Tap Wizard and will be preserved."
 
-    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
-        || die "gcode_shell_command.py installation verification failed."
-
-    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
-
-    ok "Installed required Klipper gcode_shell_command.py."
-
-elif [[ "${dst_gshell_hash}" == "${src_gshell_hash}" ]]; then
-    # Installed copy already matches our bundled version.
-    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
-
-    ok "Klipper gcode_shell_command.py already matches the repository version."
-
-elif [[ -n "${previous_gshell_hash}" && "${dst_gshell_hash}" == "${previous_gshell_hash}" ]]; then
-    # We previously installed this exact copy and our bundled version changed.
-    # Update it silently.
-    info "A newer repository version of gcode_shell_command.py is available. Updating it automatically..."
-
-    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
-        || die "Failed to update required gcode_shell_command.py."
-
-    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
-        || die "gcode_shell_command.py update verification failed."
-
-    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
-
-    ok "Updated required Klipper gcode_shell_command.py."
+elif [[ -e "${DST_GCODE_SHELL_COMMAND}" && ! -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    die "Existing gcode_shell_command.py path is not a regular file: ${DST_GCODE_SHELL_COMMAND}"
 
 else
-    # An existing copy is present but it was not installed/managed by us.
-    # Preserve it rather than overwriting another project's or user's copy.
-    ok "Existing gcode_shell_command.py detected."
-    info "The existing file is not managed by the Eddy Tap Wizard and will be preserved."
+    if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+        dst_gshell_hash="$(sha256sum "${DST_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
+    fi
+
+    if [[ -f "${GCODE_SHELL_HASH_FILE}" ]]; then
+        previous_gshell_hash="$(tr -d '[:space:]' < "${GCODE_SHELL_HASH_FILE}")"
+    fi
+
+    if [[ -z "${dst_gshell_hash}" ]]; then
+        info "Required gcode_shell_command.py was not found. Installing it automatically..."
+
+        cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
+            || die "Failed to install required gcode_shell_command.py."
+
+        [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+            || die "gcode_shell_command.py installation verification failed."
+
+        printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+        ok "Installed required Klipper gcode_shell_command.py."
+
+    elif [[ "${dst_gshell_hash}" == "${src_gshell_hash}" ]]; then
+        printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+        ok "Klipper gcode_shell_command.py already matches the repository version."
+
+    elif [[ -n "${previous_gshell_hash}" && "${dst_gshell_hash}" == "${previous_gshell_hash}" ]]; then
+        info "A newer repository version of gcode_shell_command.py is available. Updating it automatically..."
+
+        cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
+            || die "Failed to update required gcode_shell_command.py."
+
+        [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+            || die "gcode_shell_command.py update verification failed."
+
+        dst_gshell_hash="$(sha256sum "${DST_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
+        [[ "${dst_gshell_hash}" == "${src_gshell_hash}" ]] \
+            || die "gcode_shell_command.py update hash verification failed."
+
+        printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+        ok "Updated required Klipper gcode_shell_command.py."
+
+    else
+        rm -f -- "${GCODE_SHELL_HASH_FILE}"
+        ok "Existing gcode_shell_command.py detected."
+        info "The existing file is not managed by the Eddy Tap Wizard and will be preserved."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -2445,69 +2466,107 @@ mkdir -p "${STATE_DIR}"
 src_temp_hash="$(sha256sum "${SRC_TEMP_PROBE}" | awk '{print $1}')"
 dst_temp_hash=""
 previous_managed_hash=""
-
-if [[ -f "${DST_TEMP_PROBE}" || -L "${DST_TEMP_PROBE}" ]]; then
-    dst_temp_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
-fi
-
-if [[ -f "${TEMP_HASH_FILE}" ]]; then
-    previous_managed_hash="$(tr -d '[:space:]' < "${TEMP_HASH_FILE}")"
-fi
-
 installed_has_required_patch=0
-if [[ -f "${DST_TEMP_PROBE}" ]] \
-    && grep -Fq 'TAP_START_Z = 5.' "${DST_TEMP_PROBE}" \
-    && grep -Fq 'tool_zero_z = mpresult.bed_z' "${DST_TEMP_PROBE}" \
-    && grep -Fq 'curpos[2] = self.last_zero_pos + TAP_START_Z' "${DST_TEMP_PROBE}"; then
-    installed_has_required_patch=1
-fi
 
-install_temp_probe_copy() {
-    if [[ -e "${DST_TEMP_PROBE}" || -L "${DST_TEMP_PROBE}" ]]; then
-        backup_path "${DST_TEMP_PROBE}" "temperature_probe.py.backup"
-        rm -f -- "${DST_TEMP_PROBE}"
-    fi
+# A symlink is treated as externally managed. Preserve it if its target already
+# contains the required Eddy Tap behavior; otherwise stop without replacing it.
+if [[ -L "${DST_TEMP_PROBE}" ]]; then
+    rm -f -- "${TEMP_HASH_FILE}"
 
-    cp -a -- "${SRC_TEMP_PROBE}" "${DST_TEMP_PROBE}"
-    printf '%s\n' "${src_temp_hash}" > "${TEMP_HASH_FILE}"
-    ok "Installed repository temperature_probe.py into Klipper."
-}
-
-if [[ "${dst_temp_hash}" == "${src_temp_hash}" && -n "${dst_temp_hash}" ]]; then
-    printf '%s\n' "${src_temp_hash}" > "${TEMP_HASH_FILE}"
-    ok "Klipper temperature_probe.py already matches the repository version."
-
-elif [[ -n "${previous_managed_hash}" && "${dst_temp_hash}" == "${previous_managed_hash}" ]]; then
-    info "The previously managed temperature_probe.py is unchanged locally."
-    info "The repository version has changed; updating the managed copy."
-    install_temp_probe_copy
-
-elif [[ "${installed_has_required_patch}" -eq 1 ]]; then
-    ok "Installed Klipper temperature_probe.py already contains the required Eddy Tap thermal behavior."
-    warn "It differs from the repository copy, so it will be left untouched to avoid overwriting newer/upstream code."
-
-    if ask_yes_no "Replace it with this repository's temperature_probe.py anyway?" "n"; then
-        install_temp_probe_copy
+    if [[ -f "${DST_TEMP_PROBE}" ]] \
+        && grep -Fq 'TAP_START_Z = 5.' "${DST_TEMP_PROBE}" \
+        && grep -Fq 'tool_zero_z = mpresult.bed_z' "${DST_TEMP_PROBE}" \
+        && grep -Fq 'curpos[2] = self.last_zero_pos + TAP_START_Z' "${DST_TEMP_PROBE}"; then
+        ok "Symlinked temperature_probe.py already contains the required Eddy Tap thermal behavior."
+        info "The symlink is externally managed and will be preserved."
+    else
+        die "temperature_probe.py is a symlink whose target does not contain the required Eddy Tap changes. Replace/update the symlink target manually, then rerun the installer."
     fi
 
 else
-    warn "Installed Klipper temperature_probe.py does not contain all required Eddy Tap thermal changes."
+    if [[ -e "${DST_TEMP_PROBE}" && ! -f "${DST_TEMP_PROBE}" ]]; then
+        die "Existing temperature_probe.py path is not a regular file: ${DST_TEMP_PROBE}"
+    fi
 
-    if ask_yes_no "Back it up and install the repository's modified temperature_probe.py?" "y"; then
+    if [[ -f "${DST_TEMP_PROBE}" ]]; then
+        dst_temp_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
+    fi
+
+    if [[ -f "${TEMP_HASH_FILE}" ]]; then
+        previous_managed_hash="$(tr -d '[:space:]' < "${TEMP_HASH_FILE}")"
+    fi
+
+    if [[ -f "${DST_TEMP_PROBE}" ]] \
+        && grep -Fq 'TAP_START_Z = 5.' "${DST_TEMP_PROBE}" \
+        && grep -Fq 'tool_zero_z = mpresult.bed_z' "${DST_TEMP_PROBE}" \
+        && grep -Fq 'curpos[2] = self.last_zero_pos + TAP_START_Z' "${DST_TEMP_PROBE}"; then
+        installed_has_required_patch=1
+    fi
+
+    install_temp_probe_copy() {
+        if [[ -e "${DST_TEMP_PROBE}" ]]; then
+            backup_path "${DST_TEMP_PROBE}" "temperature_probe.py.backup"
+            rm -f -- "${DST_TEMP_PROBE}"
+        fi
+
+        cp -a -- "${SRC_TEMP_PROBE}" "${DST_TEMP_PROBE}"
+
+        local installed_hash
+        installed_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
+        [[ "${installed_hash}" == "${src_temp_hash}" ]] \
+            || die "temperature_probe.py installation hash verification failed."
+
+        printf '%s\n' "${src_temp_hash}" > "${TEMP_HASH_FILE}"
+        ok "Installed repository temperature_probe.py into Klipper."
+    }
+
+    if [[ "${dst_temp_hash}" == "${src_temp_hash}" && -n "${dst_temp_hash}" ]]; then
+        printf '%s\n' "${src_temp_hash}" > "${TEMP_HASH_FILE}"
+        ok "Klipper temperature_probe.py already matches the repository version."
+
+    elif [[ -n "${previous_managed_hash}" && "${dst_temp_hash}" == "${previous_managed_hash}" ]]; then
+        info "The previously managed temperature_probe.py is unchanged locally."
+        info "The repository version has changed; updating the managed copy."
         install_temp_probe_copy
+
+    elif [[ "${installed_has_required_patch}" -eq 1 ]]; then
+        rm -f -- "${TEMP_HASH_FILE}"
+        ok "Installed Klipper temperature_probe.py already contains the required Eddy Tap thermal behavior."
+        warn "It differs from the repository copy, so it will be left untouched to avoid overwriting newer/upstream code."
+
+        if ask_yes_no "Replace it with this repository's temperature_probe.py anyway?" "n"; then
+            install_temp_probe_copy
+        fi
+
     else
-        die "temperature_probe.py was not replaced. Thermal Eddy Tap calibration may not behave as expected."
+        warn "Installed Klipper temperature_probe.py does not contain all required Eddy Tap thermal changes."
+
+        if ask_yes_no "Back it up and install the repository's modified temperature_probe.py?" "y"; then
+            install_temp_probe_copy
+        else
+            die "temperature_probe.py was not replaced. Thermal Eddy Tap calibration may not behave as expected."
+        fi
     fi
 fi
 
 # Complete legacy cleanup only after the new flat files and include tree exist.
 if [[ "${CONFIG_MODE}" == "legacy_migrated" ]]; then
-    finalize_legacy_layout_migration         || die "Legacy migration could not be finalized safely. The legacy directory was left in place."
+    finalize_legacy_layout_migration \
+        || die "Legacy migration could not be finalized safely. The legacy directory was left in place."
 fi
 
 # ---------------------------------------------------------------------------
 # Final checks
 # ---------------------------------------------------------------------------
+
+symlink_points_to() {
+    local link_path="$1"
+    local source_path="$2"
+
+    [[ -L "${link_path}" ]] || return 1
+    [[ "$(readlink -f -- "${link_path}" 2>/dev/null || true)" \
+        == "$(readlink -f -- "${source_path}" 2>/dev/null || true)" ]]
+}
 
 rebuild_cfg_tree
 scan_eddy_sections
@@ -2515,71 +2574,63 @@ scan_eddy_sections
 printf '\n%sInstallation summary%s\n' "${BOLD}" "${RESET}"
 printf '%s\n' "------------------------------------------------------------"
 
-if [[ -L "${ACTIVE_DST_MACROS}" ]]; then
-    ok "eddy_macros.cfg installed: ${ACTIVE_DST_MACROS}"
-else
-    warn "eddy_macros.cfg is not a symlink at ${ACTIVE_DST_MACROS}."
-fi
+# Repo-managed config links must exist and point at the expected repository files.
+symlink_points_to "${ACTIVE_DST_MACROS}" "${SRC_MACROS}" \
+    || die "eddy_macros.cfg is not linked to the expected repository file: ${ACTIVE_DST_MACROS}"
+ok "eddy_macros.cfg installed: ${ACTIVE_DST_MACROS}"
 
-if [[ -L "${ACTIVE_DST_WIZARD}" ]]; then
-    ok "eddy_setup_wizard.cfg installed: ${ACTIVE_DST_WIZARD}"
-else
-    warn "eddy_setup_wizard.cfg is not a symlink at ${ACTIVE_DST_WIZARD}."
-fi
+symlink_points_to "${ACTIVE_DST_WIZARD}" "${SRC_WIZARD}" \
+    || die "eddy_setup_wizard.cfg is not linked to the expected repository file: ${ACTIVE_DST_WIZARD}"
+ok "eddy_setup_wizard.cfg installed: ${ACTIVE_DST_WIZARD}"
 
 if [[ "${CONFIG_MODE}" == "generated" ]]; then
-    if [[ -f "${DST_EDDY}" ]]; then
-        ok "User-owned eddy.cfg present: ${DST_EDDY}"
-    else
-        warn "Expected user-owned eddy.cfg is missing."
-    fi
+    [[ -f "${DST_EDDY}" ]] \
+        || die "Expected user-owned eddy.cfg is missing: ${DST_EDDY}"
+    ok "User-owned eddy.cfg present: ${DST_EDDY}"
 
-    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$'; then
-        ok "[include eddy.cfg] detected."
-    else
-        warn "[include eddy.cfg] was not detected."
-    fi
+    cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$' \
+        || die "[include eddy.cfg] was not detected after installation."
+    ok "[include eddy.cfg] detected."
+
 elif [[ "${CONFIG_MODE}" == "legacy_migrated" ]]; then
     ok "Legacy nested Eddy Tap Wizard layout migrated to the flat config layout."
+    [[ -f "${DST_EDDY}" ]] || die "Migrated user-owned Eddy config is missing: ${DST_EDDY}"
     ok "User-owned Eddy config: ${DST_EDDY}"
 
-    if [[ ! -d "${LEGACY_EDDY_DIR}" ]]; then
-        ok "Legacy config/eddy/ directory is no longer present."
-    else
-        warn "Legacy config/eddy/ directory still exists."
-    fi
+    [[ ! -d "${LEGACY_EDDY_DIR}" ]] \
+        || die "Legacy config/eddy/ directory still exists after migration finalization."
+    ok "Legacy config/eddy/ directory is no longer present."
 
-    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$'; then
-        ok "[include eddy.cfg] detected."
-    else
-        warn "[include eddy.cfg] was not detected."
-    fi
+    cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$' \
+        || die "[include eddy.cfg] was not detected after legacy migration."
+    ok "[include eddy.cfg] detected."
+
 elif [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
     ok "Legacy nested Eddy Tap Wizard layout preserved."
     ok "User-owned Eddy config: ${LEGACY_EDDY_CFG}"
 
-    if path_is_active "${LEGACY_EDDY_CFG}" \
-        && path_is_active "${LEGACY_WIZARD}" \
-        && path_is_active "${LEGACY_MACROS}"; then
-        ok "Legacy Eddy config, Wizard, and macros remain active."
-    else
-        warn "One or more legacy Eddy files are not active."
-    fi
+    path_is_active "${LEGACY_EDDY_CFG}" \
+        || die "Legacy Eddy config is not active."
+    path_is_active "${LEGACY_WIZARD}" \
+        || die "Legacy Eddy setup wizard is not active."
+    path_is_active "${LEGACY_MACROS}" \
+        || die "Legacy Eddy macros are not active."
+    ok "Legacy Eddy config, Wizard, and macros remain active."
+
 elif [[ "${CONFIG_MODE}" == "existing_eddy_file" ]]; then
     ok "Pre-existing user-owned eddy.cfg preserved and activated."
 
-    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$'; then
-        ok "[include eddy.cfg] detected."
-    else
-        warn "[include eddy.cfg] was not detected."
-    fi
+    cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy\.cfg\][[:space:]]*(#.*)?$' \
+        || die "[include eddy.cfg] was not detected for the existing user-owned Eddy config."
+    ok "[include eddy.cfg] detected."
 
     if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy_setup_wizard\.cfg\][[:space:]]*(#.*)?$' \
        && cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy_macros\.cfg\][[:space:]]*(#.*)?$'; then
         ok "Wizard includes detected."
     else
-        warn "Wizard includes are not both detectable."
+        die "Wizard includes are not both active for the existing user-owned Eddy config."
     fi
+
 else
     ok "Existing native Eddy configuration preserved in-place."
 
@@ -2587,7 +2638,7 @@ else
        && cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+eddy_macros\.cfg\][[:space:]]*(#.*)?$'; then
         ok "Direct wizard includes detected."
     else
-        warn "Direct wizard includes are not both detectable."
+        die "Direct wizard includes are not both active for the existing native Eddy configuration."
     fi
 fi
 
@@ -2595,13 +2646,13 @@ scan_calibration_reference
 if [[ "${BED_MESH_ZERO_VALID}" -eq 1 ]]; then
     ok "Required [bed_mesh] zero_reference_position detected: X${BED_MESH_ZERO_X} Y${BED_MESH_ZERO_Y}"
 else
-    warn "Required [bed_mesh] zero_reference_position was not detected."
+    die "Required [bed_mesh] zero_reference_position was not detected during final verification."
 fi
 
 if cfg_tree_has_regex '^[[:space:]]*\[save_variables\][[:space:]]*(#.*)?$'; then
     ok "[save_variables] detected."
 else
-    warn "[save_variables] is still missing."
+    die "[save_variables] is missing during final verification."
 fi
 
 if [[ -f "${DST_TEMP_PROBE}" ]] \
@@ -2610,7 +2661,7 @@ if [[ -f "${DST_TEMP_PROBE}" ]] \
     && grep -Fq 'curpos[2] = self.last_zero_pos + TAP_START_Z' "${DST_TEMP_PROBE}"; then
     ok "Required temperature_probe.py Eddy Tap thermal changes detected."
 else
-    warn "Required temperature_probe.py Eddy Tap thermal changes were not fully detected."
+    die "Required temperature_probe.py Eddy Tap thermal changes were not fully detected."
 fi
 
 if [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
@@ -2635,17 +2686,22 @@ else
     fi
 fi
 
-if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
-    ok "Required gcode_shell_command.py detected."
+if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+    && grep -Fq 'RUN_SHELL_COMMAND' "${DST_GCODE_SHELL_COMMAND}" \
+    && grep -Fq 'def load_config_prefix' "${DST_GCODE_SHELL_COMMAND}"; then
+    ok "Required gcode_shell_command.py capability detected."
 else
-    die "Required gcode_shell_command.py is missing. EDDY_CLEAR_CALIBRATION cannot operate without it."
+    die "gcode_shell_command.py is missing or does not expose the required RUN_SHELL_COMMAND extension. EDDY_CLEAR_CALIBRATION cannot operate without it."
 fi
 
-if [[ "${EDDY_STATE}" == "conflict" || "${EDDY_STATE}" == "eddy_ng" ]]; then
-    warn "Final Eddy discovery indicates an incompatible/conflicting configuration."
-else
-    ok "Final Eddy discovery did not find an Eddy-NG/native conflict."
-fi
+case "${EDDY_STATE}" in
+    conflict|eddy_ng|btt_native)
+        die "Final Eddy discovery indicates an incompatible/conflicting configuration (${EDDY_STATE}). Klipper will not be restarted automatically."
+        ;;
+    *)
+        ok "Final Eddy discovery did not find an unsupported Eddy configuration."
+        ;;
+esac
 
 if [[ "${BACKUP_CREATED}" -eq 1 ]]; then
     info "Backups created in: ${BACKUP_DIR}"
