@@ -612,7 +612,7 @@ scan_legacy_wizard_layout() {
     for file in "${ACTIVE_CFG_FILES[@]}"; do
         if [[ "${file}" == "${LEGACY_EDDY_DIR}/"* ]]; then
             case "$(basename -- "${file}")" in
-                eddy.cfg|eddy_setup_wizard.cfg|eddy_macros.cfg)
+                eddy.cfg|eddy_setup_wizard.cfg|eddy_macros.cfg|eddy_clear_calibration.cfg)
                     ;;
                 *)
                     LEGACY_EXTRA_ACTIVE_FILES+=("${file}")
@@ -1321,6 +1321,7 @@ replace_placeholder() {
 }
 
 render_clear_calibration_cfg() {
+    local dst_clear="${1:-"${dst_clear}"
     local tmp_clear
     local escaped_script
 
@@ -1328,12 +1329,12 @@ render_clear_calibration_cfg() {
 
     # 4B-4 only creates a missing rendered config.
     # Existing-file update/ownership behavior will be handled separately.
-    if [[ -e "${DST_CLEAR}" || -L "${DST_CLEAR}" ]]; then
-        [[ -f "${DST_CLEAR}" ]] \
-            || die "Existing clear-calibration path is not a regular file: ${DST_CLEAR}"
+    if [[ -e "${dst_clear}" || -L "${DST_CLEAR}" ]]; then
+        [[ -f "${dst_clear}" ]] \
+            || die "Existing clear-calibration path is not a regular file: ${dst_clear}"
 
-        if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${DST_CLEAR}"; then
-            die "Existing ${DST_CLEAR} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
+        if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${dst_clear}"; then
+            die "Existing ${dst_clear} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
         fi
 
         ok "Existing eddy_clear_calibration.cfg detected; preserving it."
@@ -1368,19 +1369,19 @@ render_clear_calibration_cfg() {
         die "Rendered Eddy clear-calibration config does not contain the expected script path."
     fi
 
-    cp -- "${tmp_clear}" "${DST_CLEAR}" \
+    cp -- "${tmp_clear}" "${dst_clear}" \
         || {
             rm -f -- "${tmp_clear}"
             die "Failed to install rendered eddy_clear_calibration.cfg."
         }
 
-    chmod 0644 "${DST_CLEAR}" 2>/dev/null || true
+    chmod 0644 "${dst_clear}" 2>/dev/null || true
     rm -f -- "${tmp_clear}"
 
-    [[ -f "${DST_CLEAR}" ]] \
+    [[ -f "${dst_clear}" ]] \
         || die "eddy_clear_calibration.cfg installation verification failed."
 
-    ok "Generated Eddy clear-calibration configuration: ${DST_CLEAR}"
+    ok "Generated Eddy clear-calibration configuration: ${dst_clear}"
 }
 
 validate_can_uuid() {
