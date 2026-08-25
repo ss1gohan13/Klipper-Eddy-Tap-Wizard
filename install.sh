@@ -104,16 +104,6 @@ ACTIVE_DST_WIZARD="${DST_WIZARD}"
 LEGACY_MIGRATION_CLEANUP_PENDING=0
 FRESH_EDDY_CFG_GENERATED=0
 
-if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
-    ok "Required gcode_shell_command.py detected."
-else
-    die "Required gcode_shell_command.py is missing. EDDY_CLEAR_CALIBRATION cannot operate without it."
-fi
-
-# ---------------------------------------------------------------------------
-# Ensure required gcode_shell_command.py is installed
-# ---------------------------------------------------------------------------
-
 printf '\n%sChecking Klipper gcode_shell_command.py...%s\n' "${BOLD}" "${RESET}"
 
 if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
@@ -354,6 +344,7 @@ if [[ "${DETECT_ONLY}" -eq 0 ]]; then
     [[ -f "${SRC_CLEAR_TEMPLATE}" ]] || die "Repository file missing: ${SRC_CLEAR_TEMPLATE}"
     [[ -f "${SRC_CLEAR_SCRIPT}" ]] || die "Repository file missing: ${SRC_CLEAR_SCRIPT}"
     [[ -f "${SRC_TEMP_PROBE}" ]] || die "Repository file missing: ${SRC_TEMP_PROBE}"
+    [[ -f "${SRC_GCODE_SHELL_COMMAND}" ]] || die "Repository file missing: ${SRC_GCODE_SHELL_COMMAND}"
 
     # Verify this looks like the expected patched temperature_probe.py.
     grep -Fq 'TAP_START_Z = 5.' "${SRC_TEMP_PROBE}" \
@@ -2119,6 +2110,26 @@ if [[ -n "${existing_serial}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Ensure required gcode_shell_command.py is installed
+# ---------------------------------------------------------------------------
+
+printf '\n%sChecking Klipper gcode_shell_command.py...%s\n' "${BOLD}" "${RESET}"
+
+if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    ok "Klipper gcode_shell_command.py is already installed."
+else
+    info "Required gcode_shell_command.py was not found. Installing it automatically..."
+
+    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
+        || die "Failed to install required gcode_shell_command.py."
+
+    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+        || die "gcode_shell_command.py installation verification failed."
+
+    ok "Installed required Klipper gcode_shell_command.py."
+fi
+
+# ---------------------------------------------------------------------------
 # Install/update temperature_probe.py safely
 # ---------------------------------------------------------------------------
 
@@ -2295,6 +2306,12 @@ if [[ -f "${DST_TEMP_PROBE}" ]] \
     ok "Required temperature_probe.py Eddy Tap thermal changes detected."
 else
     warn "Required temperature_probe.py Eddy Tap thermal changes were not fully detected."
+fi
+
+if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    ok "Required gcode_shell_command.py detected."
+else
+    die "Required gcode_shell_command.py is missing. EDDY_CLEAR_CALIBRATION cannot operate without it."
 fi
 
 if [[ "${EDDY_STATE}" == "conflict" || "${EDDY_STATE}" == "eddy_ng" ]]; then
