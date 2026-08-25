@@ -2291,7 +2291,6 @@ printf '  %sEDDY_SETUP%s\n\n' "${BOLD}" "${RESET}"
 printf 'Future project updates can be applied with:\n\n'
 printf '  cd %q\n' "${SCRIPT_DIR}"
 printf '  ./install.sh --update\n\n'
-#!/usr/bin/env bash
 #
 # Klipper Eddy Tap Wizard Installer - rough draft
 #
