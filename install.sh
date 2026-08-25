@@ -71,8 +71,12 @@ LEGACY_MACROS="${LEGACY_EDDY_DIR}/eddy_macros.cfg"
 LEGACY_WIZARD="${LEGACY_EDDY_DIR}/eddy_setup_wizard.cfg"
 LEGACY_CLEAR="${LEGACY_EDDY_DIR}/eddy_clear_calibration.cfg"
 
+# ---------------------------------------------------------------------------
+# Install/update temperature_probe.py safely
+# ---------------------------------------------------------------------------
+
 DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
-GCODE_SHELL_COMMAND="${KLIPPER_EXTRAS_DIR}/gcode_shell_command.py"
+DST_GCODE_SHELL_COMMAND="${KLIPPER_EXTRAS_DIR}/gcode_shell_command.py"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 
 STATE_DIR="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/${PROJECT_SLUG}"
@@ -99,6 +103,32 @@ ACTIVE_DST_MACROS="${DST_MACROS}"
 ACTIVE_DST_WIZARD="${DST_WIZARD}"
 LEGACY_MIGRATION_CLEANUP_PENDING=0
 FRESH_EDDY_CFG_GENERATED=0
+
+if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    ok "Required gcode_shell_command.py detected."
+else
+    die "Required gcode_shell_command.py is missing. EDDY_CLEAR_CALIBRATION cannot operate without it."
+fi
+
+# ---------------------------------------------------------------------------
+# Ensure required gcode_shell_command.py is installed
+# ---------------------------------------------------------------------------
+
+printf '\n%sChecking Klipper gcode_shell_command.py...%s\n' "${BOLD}" "${RESET}"
+
+if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+    ok "Klipper gcode_shell_command.py is already installed."
+else
+    info "Required gcode_shell_command.py was not found. Installing it automatically..."
+
+    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
+        || die "Failed to install required gcode_shell_command.py."
+
+    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+        || die "gcode_shell_command.py installation verification failed."
+
+    ok "Installed required Klipper gcode_shell_command.py."
+fi
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -316,9 +346,7 @@ command -v sed >/dev/null 2>&1 || die "sed is required but was not found."
 # In detect-only mode the repository payload does not need to be complete.
 if [[ "${DETECT_ONLY}" -eq 0 ]]; then
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
-    [[ -f "${GCODE_SHELL_COMMAND}" ]] \
-        || die "The gcode_shell_command Klipper extension is required for EDDY_CLEAR_CALIBRATION but was not found: ${GCODE_SHELL_COMMAND}"
-
+    
     [[ -f "${SRC_MACROS}" ]] || die "Repository file missing: ${SRC_MACROS}"
     [[ -f "${SRC_WIZARD}" ]] || die "Repository file missing: ${SRC_WIZARD}"
     [[ -f "${SRC_TEMPLATE_FULL}" ]] || die "Repository file missing: ${SRC_TEMPLATE_FULL}"
