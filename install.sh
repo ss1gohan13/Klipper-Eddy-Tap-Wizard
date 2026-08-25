@@ -1664,6 +1664,11 @@ legacy_migration_preflight() {
         die "Cannot migrate automatically because ${DST_CLEAR} already exists. It will not be overwritten."
     fi
 
+    if [[ -L "${LEGACY_CLEAR}" ]]; then
+        warn "The legacy eddy_clear_calibration.cfg is a symlink."
+        die "Automatic migration cannot safely preserve a symlinked legacy clear-calibration config. Keep the legacy layout or replace the symlink with a regular file before migrating."
+    fi
+
     if (( ${#LEGACY_EXTRA_ACTIVE_FILES[@]} > 0 )); then
         error "Automatic migration is disabled because extra active files exist under ${LEGACY_EDDY_DIR}:"
         for file in "${LEGACY_EXTRA_ACTIVE_FILES[@]}"; do
