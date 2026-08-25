@@ -1660,6 +1660,10 @@ legacy_migration_preflight() {
         die "Cannot migrate automatically because ${DST_EDDY} already exists. It will not be overwritten."
     fi
 
+    if [[ -e "${DST_CLEAR}" || -L "${DST_CLEAR}" ]]; then
+        die "Cannot migrate automatically because ${DST_CLEAR} already exists. It will not be overwritten."
+    fi
+
     if (( ${#LEGACY_EXTRA_ACTIVE_FILES[@]} > 0 )); then
         error "Automatic migration is disabled because extra active files exist under ${LEGACY_EDDY_DIR}:"
         for file in "${LEGACY_EXTRA_ACTIVE_FILES[@]}"; do
@@ -1748,6 +1752,28 @@ prepare_legacy_layout_migration() {
     rm -f -- "${tmp_cfg}"
 
     ok "Copied user-owned Eddy configuration to: ${DST_EDDY}"
+
+    # Preserve the existing legacy clear-calibration configuration when moving
+    # from the nested layout to the flat layout.
+    if [[ -e "${LEGACY_CLEAR}" || -L "${LEGACY_CLEAR}" ]]; then
+        cp -L -- "${LEGACY_CLEAR}" "${DST_CLEAR}" \
+            || die "Failed to migrate legacy eddy_clear_calibration.cfg."
+
+        chmod 0644 "${DST_CLEAR}" 2>/dev/null || true
+
+    # Transfer the ownership record as well. The normal renderer that runs
+    # afterward will decide whether the copied file is current, safely
+    # updatable, or user-modified.
+    if [[ -f "${LEGACY_CLEAR_HASH_FILE}" ]]; then
+        mkdir -p "${STATE_DIR}"
+        cp -- "${LEGACY_CLEAR_HASH_FILE}" "${CLEAR_CFG_HASH_FILE}" \
+            || die "Failed to transfer clear-calibration ownership state."
+    else
+        rm -f -- "${CLEAR_CFG_HASH_FILE}"
+    fi
+
+    ok "Migrated legacy eddy_clear_calibration.cfg to: ${DST_CLEAR}"
+fi
 
     rewrite_legacy_include_to_flat
 
