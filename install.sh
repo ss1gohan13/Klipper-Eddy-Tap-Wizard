@@ -1874,7 +1874,6 @@ case "${EDDY_STATE}" in
             ACTIVE_DST_WIZARD="${DST_WIZARD}"
         fi
         ;;
-    btt_native)
     
     native)
         CONFIG_MODE="existing_native"
