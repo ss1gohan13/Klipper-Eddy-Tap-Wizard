@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Klipper Eddy Tap Wizard Installer - rough draft
+# Klipper Eddy Tap Wizard Installer
 #
-# This draft extends the existing installer with:
+# This version extends the existing installer with:
 #   - active Klipper config-tree discovery
 #   - native Eddy / BTT-style Eddy / Eddy-NG detection
 #   - legacy nested Eddy Tap Wizard layout detection/migration
@@ -1301,7 +1301,7 @@ case "${EDDY_STATE}" in
     eddy_ng)
         printf '\n'
         warn "The Eddy Tap Wizard requires Klipper's native [probe_eddy_current] implementation."
-        warn "Automatic Eddy-NG migration is intentionally NOT implemented in this rough draft."
+        warn "Automatic Eddy-NG migration is intentionally NOT implemented in this version."
         warn "No printer configuration or Klipper files have been changed."
         exit 0
         ;;
@@ -1697,7 +1697,7 @@ legacy_migration_preflight() {
 
     if [[ "${include_file_id}" != "${printer_cfg_id}" ]]; then
         error "The legacy Eddy layout is loaded from ${include_file}:${include_line}"
-        die "This rough draft only auto-migrates legacy includes located directly in printer.cfg. Keep the existing layout for now."
+        die "This version only auto-migrates legacy includes located directly in printer.cfg. Keep the existing layout for now."
     fi
 
     legacy_cfg_has_wizard_includes \
