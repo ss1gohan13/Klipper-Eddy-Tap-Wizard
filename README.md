@@ -567,6 +567,29 @@ This automatically accepts normal yes/no prompts.
 
 ---
 
+## Uninstalling the Wizard
+
+The installer includes a safe uninstall option.
+
+Run the installer normally:
+
+```bash
+cd ~/Klipper-Eddy-Tap-Wizard
+./install.sh
+```
+
+Then Choose:
+
+3) Uninstall
+
+Alternatively
+
+via ssh
+
+```./install.sh --uninstall```
+
+---
+
 # Starting the Wizard
 
 After installation and a successful Klipper restart, run:
