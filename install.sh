@@ -81,6 +81,7 @@ PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 
 STATE_DIR="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/${PROJECT_SLUG}"
 TEMP_HASH_FILE="${STATE_DIR}/temperature_probe.installed.sha256"
+GCODE_SHELL_HASH_FILE="${STATE_DIR}/gcode_shell_command.installed.sha256"
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 BACKUP_ROOT="${CONFIG_DIR}/eddy_wizard_backups"
@@ -2094,14 +2095,27 @@ if [[ -n "${existing_serial}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Ensure required gcode_shell_command.py is installed
+# Install/update required gcode_shell_command.py safely
 # ---------------------------------------------------------------------------
 
 printf '\n%sChecking Klipper gcode_shell_command.py...%s\n' "${BOLD}" "${RESET}"
 
+mkdir -p "${STATE_DIR}"
+
+src_gshell_hash="$(sha256sum "${SRC_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
+dst_gshell_hash=""
+previous_gshell_hash=""
+
 if [[ -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
-    ok "Klipper gcode_shell_command.py is already installed."
-else
+    dst_gshell_hash="$(sha256sum "${DST_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
+fi
+
+if [[ -f "${GCODE_SHELL_HASH_FILE}" ]]; then
+    previous_gshell_hash="$(tr -d '[:space:]' < "${GCODE_SHELL_HASH_FILE}")"
+fi
+
+if [[ -z "${dst_gshell_hash}" ]]; then
+    # gcode_shell_command.py is not installed. Install it silently.
     info "Required gcode_shell_command.py was not found. Installing it automatically..."
 
     cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
@@ -2110,7 +2124,36 @@ else
     [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
         || die "gcode_shell_command.py installation verification failed."
 
+    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+
     ok "Installed required Klipper gcode_shell_command.py."
+
+elif [[ "${dst_gshell_hash}" == "${src_gshell_hash}" ]]; then
+    # Installed copy already matches our bundled version.
+    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+
+    ok "Klipper gcode_shell_command.py already matches the repository version."
+
+elif [[ -n "${previous_gshell_hash}" && "${dst_gshell_hash}" == "${previous_gshell_hash}" ]]; then
+    # We previously installed this exact copy and our bundled version changed.
+    # Update it silently.
+    info "A newer repository version of gcode_shell_command.py is available. Updating it automatically..."
+
+    cp -a -- "${SRC_GCODE_SHELL_COMMAND}" "${DST_GCODE_SHELL_COMMAND}" \
+        || die "Failed to update required gcode_shell_command.py."
+
+    [[ -f "${DST_GCODE_SHELL_COMMAND}" ]] \
+        || die "gcode_shell_command.py update verification failed."
+
+    printf '%s\n' "${src_gshell_hash}" > "${GCODE_SHELL_HASH_FILE}"
+
+    ok "Updated required Klipper gcode_shell_command.py."
+
+else
+    # An existing copy is present but it was not installed/managed by us.
+    # Preserve it rather than overwriting another project's or user's copy.
+    ok "Existing gcode_shell_command.py detected."
+    info "The existing file is not managed by the Eddy Tap Wizard and will be preserved."
 fi
 
 # ---------------------------------------------------------------------------
