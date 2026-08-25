@@ -1783,8 +1783,10 @@ esac
 # Generate portable clear-calibration configuration
 # ---------------------------------------------------------------------------
 
-if [[ "${CONFIG_MODE}" != "legacy_keep" ]]; then
-    render_clear_calibration_cfg
+if [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
+    render_clear_calibration_cfg "${LEGACY_CLEAR}"
+else
+    render_clear_calibration_cfg "${DST_CLEAR}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -2109,6 +2111,42 @@ ensure_clear_calibration_include() {
     ok "Activated eddy_clear_calibration.cfg."
 }
 
+ensure_legacy_clear_calibration_include() {
+    local tmp_cfg
+
+    [[ -f "${LEGACY_CLEAR}" ]] \
+        || die "Required legacy Eddy clear-calibration config is missing: ${LEGACY_CLEAR}"
+
+    rebuild_cfg_tree
+
+    if path_is_active "${LEGACY_CLEAR}"; then
+        ok "Legacy eddy_clear_calibration.cfg is already active in the Klipper config tree."
+        return 0
+    fi
+
+    info "Adding clear-calibration support to the legacy Eddy configuration..."
+
+    backup_path "${LEGACY_EDDY_CFG}" "eddy.cfg.before_clear_calibration_include"
+    tmp_cfg="$(mktemp)"
+
+    {
+        printf '# >>> Klipper Eddy Tap Wizard clear calibration >>>\n'
+        printf '[include eddy_clear_calibration.cfg]\n'
+        printf '# <<< Klipper Eddy Tap Wizard clear calibration <<<\n\n'
+        cat "${LEGACY_EDDY_CFG}"
+    } > "${tmp_cfg}"
+
+    cat "${tmp_cfg}" > "${LEGACY_EDDY_CFG}"
+    rm -f -- "${tmp_cfg}"
+
+    rebuild_cfg_tree
+
+    path_is_active "${LEGACY_CLEAR}" \
+        || die "Legacy eddy_clear_calibration.cfg was added but did not become active."
+
+    ok "Activated legacy eddy_clear_calibration.cfg."
+}
+
 if [[ "${CONFIG_MODE}" == "generated" || "${CONFIG_MODE}" == "legacy_migrated" ]]; then
     [[ -f "${DST_EDDY}" ]] || die "Flat-layout installation selected but ${DST_EDDY} does not exist."
     ensure_generated_eddy_include
@@ -2134,7 +2172,9 @@ fi
 # Ensure clear-calibration configuration is active
 # ---------------------------------------------------------------------------
 
-if [[ "${CONFIG_MODE}" != "legacy_keep" ]]; then
+if [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
+    ensure_legacy_clear_calibration_include
+else
     ensure_clear_calibration_include
 fi
 
@@ -2449,7 +2489,17 @@ else
     warn "Required temperature_probe.py Eddy Tap thermal changes were not fully detected."
 fi
 
-if [[ "${CONFIG_MODE}" != "legacy_keep" ]]; then
+if [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
+    if [[ ! -f "${LEGACY_CLEAR}" ]]; then
+        die "Required legacy eddy_clear_calibration.cfg is missing: ${LEGACY_CLEAR}"
+    elif grep -Fq '__EDDY_CLEAR_SCRIPT__' "${LEGACY_CLEAR}"; then
+        die "Legacy eddy_clear_calibration.cfg still contains an unresolved script-path placeholder."
+    elif path_is_active "${LEGACY_CLEAR}"; then
+        ok "Required legacy eddy_clear_calibration.cfg is active."
+    else
+        die "Required legacy eddy_clear_calibration.cfg exists but is not active in the Klipper config tree."
+    fi
+else
     if [[ ! -f "${DST_CLEAR}" ]]; then
         die "Required eddy_clear_calibration.cfg is missing: ${DST_CLEAR}"
     elif grep -Fq '__EDDY_CLEAR_SCRIPT__' "${DST_CLEAR}"; then
