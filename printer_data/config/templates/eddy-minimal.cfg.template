@@ -1,0 +1,87 @@
+#####################################################################
+# Klipper Eddy Tap Wizard - Minimum Eddy Configuration
+#####################################################################
+# Eddy Tap Wizard
+#####################################################################
+
+[include eddy_setup_wizard.cfg]
+[include eddy_macros.cfg]
+[include eddy_clear_calibration.cfg]
+
+#####################################################################
+# Eddy MCU
+#####################################################################
+
+[mcu eddy]
+# USB:
+serial: {{EDDY_SERIAL}}
+restart_method: command
+# CAN - use instead of "serial" when applicable:
+#canbus_uuid: {{EDDY_CANBUS_UUID}}
+
+#####################################################################
+# Eddy MCU Temperature
+#####################################################################
+
+[temperature_sensor eddy]
+sensor_type: temperature_mcu
+sensor_mcu: eddy
+min_temp: 10
+max_temp: 100
+
+#####################################################################
+# Eddy Probe
+#####################################################################
+
+[probe_eddy_current eddy]
+sensor_type: ldc1612
+descend_z: 0.5
+x_offset: {{X_OFFSET}}
+y_offset: {{Y_OFFSET}}
+i2c_mcu: eddy
+i2c_bus: i2c0f
+
+#####################################################################
+# Temperature Calibration Settings
+#####################################################################
+#
+# These values are customizable for the printer and its normal
+# operating temperatures.
+#
+# Recommended starting/default values:
+#
+#   calibration_bed_temp:       95
+#   calibration_extruder_temp: 150
+#   max_validation_temp:       100
+#
+#####################################################################
+# Eddy Temperature Compensation
+#####################################################################
+
+[temperature_probe eddy]
+sensor_type: Generic 3950
+sensor_pin: eddy:gpio26
+calibration_position: {{BED_CENTER_X}}, {{BED_CENTER_Y}}, 5
+calibration_bed_temp: {{CALIBRATION_BED_TEMP}}
+calibration_extruder_temp: {{CALIBRATION_EXTRUDER_TEMP}}
+extruder_heating_z: 5
+max_validation_temp: {{MAX_VALIDATION_TEMP}}
+
+#####################################################################
+# Bed Mesh
+#####################################################################
+
+[bed_mesh]
+horizontal_move_z: 1
+speed: 200
+mesh_min: {{MESH_MIN_X}}, {{MESH_MIN_Y}}
+mesh_max: {{MESH_MAX_X}}, {{MESH_MAX_Y}}
+probe_count: 11, 11
+zero_reference_position: {{BED_CENTER_X}}, {{BED_CENTER_Y}}
+mesh_pps: 3,3
+algorithm: bicubic
+scan_overshoot: 8
+adaptive_margin: 5
+fade_start: 1
+fade_end: 10
+fade_target: 0
