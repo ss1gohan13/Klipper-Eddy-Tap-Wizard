@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> This project is intended to be used with the latest stable release of **mainline Klipper**.
+>
+> Before installing or running the Eddy Tap Wizard, update Klipper to the latest available release.
+>
+> Older Klipper versions may be missing Eddy Tap functionality or other required changes used by this project.
+
 # Klipper Eddy Tap Setup Wizard
 
 A guided setup and calibration workflow for Klipper Eddy current probes using Eddy Tap.
