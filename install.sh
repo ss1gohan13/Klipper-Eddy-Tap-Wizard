@@ -1691,7 +1691,8 @@ finalize_legacy_layout_migration() {
 
     if path_is_active "${LEGACY_EDDY_CFG}" \
         || path_is_active "${LEGACY_MACROS}" \
-        || path_is_active "${LEGACY_WIZARD}"; then
+        || path_is_active "${LEGACY_WIZARD}" \
+        || path_is_active "${LEGACY_CLEAR}"; then
         warn "One or more legacy nested Eddy files are still active. The legacy directory will NOT be removed."
         return 1
     fi
