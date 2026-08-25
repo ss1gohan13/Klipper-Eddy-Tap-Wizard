@@ -71,10 +71,6 @@ LEGACY_MACROS="${LEGACY_EDDY_DIR}/eddy_macros.cfg"
 LEGACY_WIZARD="${LEGACY_EDDY_DIR}/eddy_setup_wizard.cfg"
 LEGACY_CLEAR="${LEGACY_EDDY_DIR}/eddy_clear_calibration.cfg"
 
-# ---------------------------------------------------------------------------
-# Install/update temperature_probe.py safely
-# ---------------------------------------------------------------------------
-
 DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
 DST_GCODE_SHELL_COMMAND="${KLIPPER_EXTRAS_DIR}/gcode_shell_command.py"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
