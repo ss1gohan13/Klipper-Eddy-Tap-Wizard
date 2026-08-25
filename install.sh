@@ -1875,14 +1875,7 @@ case "${EDDY_STATE}" in
         fi
         ;;
     btt_native)
-        CONFIG_MODE="existing_native"
-        printf '\n'
-        info "The existing BTT-style native Eddy configuration can be used in-place."
-        warn "This rough draft does not automatically migrate BTT configuration or old calibration data into eddy.cfg."
-        if ! ask_yes_no "Keep the existing native Eddy config and install/update the Tap Wizard around it?" "y"; then
-            die "Installation cancelled. Existing Eddy configuration was not changed."
-        fi
-        ;;
+    
     native)
         CONFIG_MODE="existing_native"
         printf '\n'
