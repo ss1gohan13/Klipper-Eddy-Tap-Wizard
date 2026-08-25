@@ -78,6 +78,8 @@ PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 STATE_DIR="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/${PROJECT_SLUG}"
 TEMP_HASH_FILE="${STATE_DIR}/temperature_probe.installed.sha256"
 GCODE_SHELL_HASH_FILE="${STATE_DIR}/gcode_shell_command.installed.sha256"
+CLEAR_CFG_HASH_FILE="${STATE_DIR}/eddy_clear_calibration.installed.sha256"
+LEGACY_CLEAR_HASH_FILE="${STATE_DIR}/eddy_clear_calibration.legacy.installed.sha256"
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 BACKUP_ROOT="${CONFIG_DIR}/eddy_wizard_backups"
@@ -1322,25 +1324,20 @@ replace_placeholder() {
 
 render_clear_calibration_cfg() {
     local dst_clear="${1:-${DST_CLEAR}}"
+    local hash_file="${2:-${CLEAR_CFG_HASH_FILE}}"
     local tmp_clear
     local escaped_script
+    local desired_hash=""
+    local existing_hash=""
+    local previous_hash=""
+    local backup_label=""
 
     printf '\n%sPreparing Eddy clear-calibration configuration...%s\n' "${BOLD}" "${RESET}"
 
-    # 4B-4 only creates a missing rendered config.
-    # Existing-file update/ownership behavior will be handled separately.
-    if [[ -e "${dst_clear}" || -L "${dst_clear}" ]]; then
-        [[ -f "${dst_clear}" ]] \
-            || die "Existing clear-calibration path is not a regular file: ${dst_clear}"
+    mkdir -p "${STATE_DIR}"
 
-        if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${dst_clear}"; then
-            die "Existing ${dst_clear} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
-        fi
-
-        ok "Existing eddy_clear_calibration.cfg detected; preserving it."
-        return 0
-    fi
-
+    # Always render the current desired version first. This lets us determine
+    # whether an installed copy is current, managed-and-outdated, or external.
     tmp_clear="$(mktemp)"
 
     cp -a -- "${SRC_CLEAR_TEMPLATE}" "${tmp_clear}" \
@@ -1369,19 +1366,110 @@ render_clear_calibration_cfg() {
         die "Rendered Eddy clear-calibration config does not contain the expected script path."
     fi
 
-    cp -- "${tmp_clear}" "${dst_clear}" \
-        || {
-            rm -f -- "${tmp_clear}"
-            die "Failed to install rendered eddy_clear_calibration.cfg."
-        }
+    desired_hash="$(sha256sum "${tmp_clear}" | awk '{print $1}')"
 
-    chmod 0644 "${dst_clear}" 2>/dev/null || true
-    rm -f -- "${tmp_clear}"
+    if [[ -f "${hash_file}" ]]; then
+        previous_hash="$(tr -d '[:space:]' < "${hash_file}")"
+    fi
+
+    # We never create this file as a symlink. Preserve foreign symlinks rather
+    # than following them and potentially modifying another file unexpectedly.
+    if [[ -L "${dst_clear}" ]]; then
+        if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${dst_clear}" 2>/dev/null; then
+            rm -f -- "${tmp_clear}"
+            die "Existing ${dst_clear} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
+        fi
+
+        rm -f -- "${hash_file}"
+        rm -f -- "${tmp_clear}"
+
+        warn "Existing eddy_clear_calibration.cfg is a symlink and will be preserved."
+        info "The symlink is not managed by the Eddy Tap Wizard."
+        return 0
+    fi
+
+    # Missing file: install and begin managing it.
+    if [[ ! -e "${dst_clear}" ]]; then
+        cp -- "${tmp_clear}" "${dst_clear}" \
+            || {
+                rm -f -- "${tmp_clear}"
+                die "Failed to install rendered eddy_clear_calibration.cfg."
+            }
+
+        chmod 0644 "${dst_clear}" 2>/dev/null || true
+
+        printf '%s\n' "${desired_hash}" > "${hash_file}"
+        rm -f -- "${tmp_clear}"
+
+        [[ -f "${dst_clear}" ]] \
+            || die "eddy_clear_calibration.cfg installation verification failed."
+
+        ok "Generated Eddy clear-calibration configuration: ${dst_clear}"
+        return 0
+    fi
 
     [[ -f "${dst_clear}" ]] \
-        || die "eddy_clear_calibration.cfg installation verification failed."
+        || {
+            rm -f -- "${tmp_clear}"
+            die "Existing clear-calibration path is not a regular file: ${dst_clear}"
+        }
 
-    ok "Generated Eddy clear-calibration configuration: ${dst_clear}"
+    if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${dst_clear}"; then
+        rm -f -- "${tmp_clear}"
+        die "Existing ${dst_clear} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
+    fi
+
+    existing_hash="$(sha256sum "${dst_clear}" | awk '{print $1}')"
+
+    # Existing file exactly matches what we would generate now.
+    # Record ownership even if it predates the hash-management feature.
+    if [[ "${existing_hash}" == "${desired_hash}" ]]; then
+        printf '%s\n' "${desired_hash}" > "${hash_file}"
+        rm -f -- "${tmp_clear}"
+
+        ok "eddy_clear_calibration.cfg already matches the repository version."
+        return 0
+    fi
+
+    # The destination still matches the last version that we installed.
+    # Therefore it has not been modified externally and can be safely updated.
+    if [[ -n "${previous_hash}" && "${existing_hash}" == "${previous_hash}" ]]; then
+        if [[ "${dst_clear}" == "${LEGACY_CLEAR}" ]]; then
+            backup_label="eddy_clear_calibration.cfg.before_managed_update.legacy"
+        else
+            backup_label="eddy_clear_calibration.cfg.before_managed_update"
+        fi
+
+        backup_path "${dst_clear}" "${backup_label}"
+
+        cp -- "${tmp_clear}" "${dst_clear}" \
+            || {
+                rm -f -- "${tmp_clear}"
+                die "Failed to update managed eddy_clear_calibration.cfg."
+            }
+
+        chmod 0644 "${dst_clear}" 2>/dev/null || true
+
+        existing_hash="$(sha256sum "${dst_clear}" | awk '{print $1}')"
+        if [[ "${existing_hash}" != "${desired_hash}" ]]; then
+            rm -f -- "${tmp_clear}"
+            die "eddy_clear_calibration.cfg update verification failed."
+        fi
+
+        printf '%s\n' "${desired_hash}" > "${hash_file}"
+        rm -f -- "${tmp_clear}"
+
+        ok "Updated managed eddy_clear_calibration.cfg."
+        return 0
+    fi
+
+    # The file differs from both our desired version and the last copy we
+    # installed. Treat it as user/external content and relinquish ownership.
+    rm -f -- "${hash_file}"
+    rm -f -- "${tmp_clear}"
+
+    warn "Existing eddy_clear_calibration.cfg differs from the repository version."
+    info "The file is not currently managed by the Eddy Tap Wizard and will be preserved."
 }
 
 validate_can_uuid() {
@@ -1703,7 +1791,11 @@ finalize_legacy_layout_migration() {
         info "A complete copy is preserved in: ${BACKUP_DIR}/legacy_eddy_directory"
     fi
 
-    LEGACY_MIGRATION_CLEANUP_PENDING=0
+# The nested clear-calibration file no longer exists after a successful
+# migration, so its old ownership record is no longer relevant.
+rm -f -- "${LEGACY_CLEAR_HASH_FILE}"
+
+LEGACY_MIGRATION_CLEANUP_PENDING=0
 FRESH_EDDY_CFG_GENERATED=0
     return 0
 }
@@ -1785,9 +1877,9 @@ esac
 # ---------------------------------------------------------------------------
 
 if [[ "${CONFIG_MODE}" == "legacy_keep" ]]; then
-    render_clear_calibration_cfg "${LEGACY_CLEAR}"
+    render_clear_calibration_cfg "${LEGACY_CLEAR}" "${LEGACY_CLEAR_HASH_FILE}"
 else
-    render_clear_calibration_cfg "${DST_CLEAR}"
+    render_clear_calibration_cfg "${DST_CLEAR}" "${CLEAR_CFG_HASH_FILE}"
 fi
 
 # ---------------------------------------------------------------------------
