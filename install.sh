@@ -28,6 +28,7 @@
 #   ./install.sh --yes
 #   ./install.sh --update --yes
 #   ./install.sh --detect-only
+#   ./install.sh --uninstall
 #
 set -Eeuo pipefail
 
@@ -81,6 +82,7 @@ BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 AUTO_YES=0
 DO_UPDATE=0
 DETECT_ONLY=0
+UNINSTALL=0
 AFTER_PULL="${EDDY_WIZARD_AFTER_PULL:-0}"
 
 # Installation mode selected after discovery:
@@ -138,6 +140,8 @@ Options:
                  before running the installer.
   --detect-only  Detect and report the current Eddy/Klipper configuration.
                  Do not modify printer configuration or Klipper files.
+  --uninstall    Remove the Eddy Tap Wizard integration while preserving the
+                 user's Eddy hardware configuration and calibration data.
   -y, --yes      Automatically answer yes to yes/no prompts.
                  Fresh eddy.cfg generation still requires interactive geometry
                  and connection information.
@@ -148,6 +152,12 @@ Environment overrides:
   CONFIG_DIR=/path/to/config
   KLIPPER_DIR=/path/to/klipper
   KLIPPER_EXTRAS_DIR=/path/to/klippy/extras
+
+Running ./install.sh without an action displays:
+  1) Install / Repair
+  2) Update
+  3) Uninstall
+  4) Detect only
 
 Recommended update command:
   ./install.sh --update
@@ -172,7 +182,8 @@ The installer:
   - safely manages the required gcode_shell_command.py dependency
   - safely manages the project's modified temperature_probe.py
   - creates backups before managed config/Python replacements
-  - restarts Klipper after a successful installation
+  - provides a safe uninstall path that preserves user-owned Eddy configuration
+  - restarts Klipper after a successful installation or uninstall
 EOF_USAGE
 }
 
@@ -282,6 +293,10 @@ while [[ $# -gt 0 ]]; do
             DETECT_ONLY=1
             shift
             ;;
+        --uninstall)
+            UNINSTALL=1
+            shift
+            ;;
         -y|--yes)
             AUTO_YES=1
             shift
@@ -295,6 +310,32 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "${UNINSTALL}" -eq 1 && ( "${DO_UPDATE}" -eq 1 || "${DETECT_ONLY}" -eq 1 ) ]]; then
+    die "--uninstall cannot be combined with --update or --detect-only."
+fi
+
+# A normal interactive launch always presents the available actions. Explicit
+# command-line actions, and the post-pull re-exec used by --update, skip the menu.
+if [[ "${AFTER_PULL}" -ne 1 \
+    && "${DO_UPDATE}" -eq 0 \
+    && "${DETECT_ONLY}" -eq 0 \
+    && "${UNINSTALL}" -eq 0 ]]; then
+    printf '\n%sChoose action%s\n' "${BOLD}" "${RESET}"
+    printf '%s\n' "------------------------------------------------------------"
+    printf '  1) Install / Repair\n'
+    printf '  2) Update\n'
+    printf '  3) Uninstall\n'
+    printf '  4) Detect only\n'
+    ask_choice "Action" "1" "1" "4"
+
+    case "${ANSWER}" in
+        1) ;;
+        2) DO_UPDATE=1 ;;
+        3) UNINSTALL=1 ;;
+        4) DETECT_ONLY=1 ;;
+    esac
+fi
 
 # ---------------------------------------------------------------------------
 # Safety / prerequisite checks
@@ -317,8 +358,9 @@ command -v readlink >/dev/null 2>&1 || die "readlink is required but was not fou
 [[ -d "${CONFIG_DIR}" ]] || die "Klipper config directory not found: ${CONFIG_DIR}"
 [[ -f "${PRINTER_CFG}" ]] || die "printer.cfg not found: ${PRINTER_CFG}"
 
-# In detect-only mode the repository payload does not need to be complete.
-if [[ "${DETECT_ONLY}" -eq 0 ]]; then
+# Detect-only and uninstall must remain usable even if the repository payload
+# is incomplete. Full payload validation is required only for installation.
+if [[ "${DETECT_ONLY}" -eq 0 && "${UNINSTALL}" -eq 0 ]]; then
     command -v mktemp >/dev/null 2>&1 || die "mktemp is required but was not found."
     [[ -x /usr/bin/python3 ]] || die "/usr/bin/python3 is required by the Eddy clear-calibration helper."
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
@@ -360,6 +402,10 @@ if [[ "${DETECT_ONLY}" -eq 0 ]]; then
         || die "Repository temperature_probe.py does not contain the expected safe thermal Tap start-height fix."
 
     ok "Repository files validated."
+fi
+
+if [[ "${UNINSTALL}" -eq 1 ]]; then
+    command -v mktemp >/dev/null 2>&1 || die "mktemp is required but was not found."
 fi
 
 info "Repository:      ${SCRIPT_DIR}"
@@ -699,7 +745,8 @@ scan_eddy_sections() {
         if [[ "${LEGACY_WIZARD_DETECTED}" -eq 1 ]]; then
             EDDY_STATE="legacy_wizard"
         elif path_is_active "${DST_EDDY}" \
-            && grep -Fq 'Klipper Eddy Tap Wizard' "${DST_EDDY}" 2>/dev/null; then
+            && grep -Eq '^[[:space:]]*\[include[[:space:]]+(\./)?eddy_setup_wizard\.cfg\][[:space:]]*(#.*)?$' "${DST_EDDY}" 2>/dev/null \
+            && grep -Eq '^[[:space:]]*\[include[[:space:]]+(\./)?eddy_macros\.cfg\][[:space:]]*(#.*)?$' "${DST_EDDY}" 2>/dev/null; then
             EDDY_STATE="wizard"
         elif [[ "${BTT_STYLE}" -eq 1 ]]; then
             EDDY_STATE="btt_native"
@@ -1260,6 +1307,351 @@ ensure_calibration_reference() {
 }
 
 # ---------------------------------------------------------------------------
+# Uninstall support
+# ---------------------------------------------------------------------------
+
+cfg_file_has_wizard_integration() {
+    local file="$1"
+
+    grep -Eq \
+        '^[[:space:]]*\[include[[:space:]]+(\./)?(eddy_setup_wizard|eddy_macros|eddy_clear_calibration)\.cfg\][[:space:]]*(#.*)?$|^[[:space:]]*# (>>>|<<<) Klipper Eddy Tap Wizard( Eddy Config| clear calibration| save_variables)? (>>>|<<<)[[:space:]]*$' \
+        "${file}" 2>/dev/null
+}
+
+clean_wizard_integration_from_cfg_file() {
+    local file="$1"
+    local tmp_cfg
+    local path_tag
+    local backup_label
+
+    cfg_file_has_wizard_integration "${file}" || return 0
+
+    if [[ -L "${file}" ]]; then
+        die "Uninstall cannot safely edit symlinked configuration file: ${file}. Replace it with a regular file or remove the Wizard include lines manually, then rerun uninstall."
+    fi
+
+    [[ -f "${file}" ]] || return 0
+
+    path_tag="$(printf '%s' "${file}" | sha256sum | awk '{print substr($1,1,8)}')"
+    backup_label="$(basename -- "${file}").before_eddy_wizard_uninstall.${path_tag}"
+    backup_path "${file}" "${backup_label}"
+    tmp_cfg="$(mktemp)"
+
+    awk '
+        /^[[:space:]]*\[include[[:space:]]+(\.\/)?(eddy_setup_wizard|eddy_macros|eddy_clear_calibration)\.cfg\][[:space:]]*(#.*)?$/ {
+            next
+        }
+        /^[[:space:]]*# >>> Klipper Eddy Tap Wizard( Eddy Config| clear calibration| save_variables)? >>>[[:space:]]*$/ {
+            next
+        }
+        /^[[:space:]]*# <<< Klipper Eddy Tap Wizard( Eddy Config| clear calibration| save_variables)? <<<[[:space:]]*$/ {
+            next
+        }
+        { print }
+    ' "${file}" > "${tmp_cfg}"
+
+    cat "${tmp_cfg}" > "${file}"
+    rm -f -- "${tmp_cfg}"
+
+    if grep -Eq '^[[:space:]]*\[include[[:space:]]+(\./)?(eddy_setup_wizard|eddy_macros|eddy_clear_calibration)\.cfg\][[:space:]]*(#.*)?$' "${file}"; then
+        die "Wizard include cleanup verification failed for ${file}."
+    fi
+
+    ok "Removed Eddy Tap Wizard integration from: ${file}"
+}
+
+remove_wizard_integration_from_active_tree() {
+    local file
+    local -a files_to_clean=()
+
+    rebuild_cfg_tree
+
+    # Preflight first. Do not partially rewrite the config tree if one of the
+    # files that must be edited is itself an externally managed symlink.
+    for file in "${ACTIVE_CFG_FILES[@]}"; do
+        if cfg_file_has_wizard_integration "${file}"; then
+            if [[ -L "${file}" ]]; then
+                case "${file}" in
+                    "${DST_MACROS}"|"${DST_WIZARD}"|"${LEGACY_MACROS}"|"${LEGACY_WIZARD}")
+                        continue
+                        ;;
+                esac
+                die "Uninstall found Wizard integration inside symlinked config file: ${file}. No config files were changed."
+            fi
+            files_to_clean+=("${file}")
+        fi
+    done
+
+    for file in "${files_to_clean[@]}"; do
+        clean_wizard_integration_from_cfg_file "${file}"
+    done
+
+    rebuild_cfg_tree
+
+    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+(\./)?(eddy_setup_wizard|eddy_macros|eddy_clear_calibration)\.cfg\][[:space:]]*(#.*)?$'; then
+        die "One or more Eddy Tap Wizard include statements remain active after uninstall cleanup."
+    fi
+}
+
+remove_expected_wizard_symlink() {
+    local dst="$1"
+    local src="$2"
+    local label="$3"
+    local raw_target=""
+    local resolved_target=""
+    local expected_target=""
+
+    [[ -e "${dst}" || -L "${dst}" ]] || return 0
+
+    if [[ ! -L "${dst}" ]]; then
+        info "Preserving ${label}: ${dst} is not an installer symlink."
+        return 0
+    fi
+
+    raw_target="$(readlink -- "${dst}" 2>/dev/null || true)"
+    if [[ "${raw_target}" = /* ]]; then
+        resolved_target="$(readlink -m -- "${raw_target}")"
+    else
+        resolved_target="$(readlink -m -- "$(dirname -- "${dst}")/${raw_target}")"
+    fi
+    expected_target="$(readlink -m -- "${src}")"
+
+    if [[ "${resolved_target}" != "${expected_target}" ]]; then
+        warn "Preserving ${label}: symlink does not point to this repository."
+        info "  ${dst} -> ${raw_target}"
+        return 0
+    fi
+
+    backup_path "${dst}" "$(basename -- "${dst}").before_eddy_wizard_uninstall"
+    rm -f -- "${dst}"
+    ok "Removed installer symlink: ${dst}"
+}
+
+remove_managed_clear_config() {
+    local cfg="$1"
+    local hash_file="$2"
+    local label="$3"
+    local previous_hash=""
+    local current_hash=""
+
+    if [[ ! -e "${cfg}" && ! -L "${cfg}" ]]; then
+        rm -f -- "${hash_file}"
+        return 0
+    fi
+
+    if [[ -L "${cfg}" || ! -f "${cfg}" ]]; then
+        warn "Preserving ${label}: it is not a regular installer-managed file."
+        rm -f -- "${hash_file}"
+        return 0
+    fi
+
+    if [[ -f "${hash_file}" ]]; then
+        previous_hash="$(tr -d '[:space:]' < "${hash_file}")"
+    fi
+    current_hash="$(sha256sum "${cfg}" | awk '{print $1}')"
+
+    if [[ -n "${previous_hash}" && "${current_hash}" == "${previous_hash}" ]]; then
+        backup_path "${cfg}" "$(basename -- "${cfg}").before_eddy_wizard_uninstall"
+        rm -f -- "${cfg}"
+        ok "Removed managed ${label}: ${cfg}"
+    else
+        warn "Preserving ${label}: installer ownership cannot be verified or the file was modified."
+        info "The file is no longer active after Wizard include cleanup."
+    fi
+
+    rm -f -- "${hash_file}"
+}
+
+ask_python_cleanup() {
+    local answer=""
+
+    [[ -t 0 ]] || return 1
+
+    printf '\nShared Klipper Python dependency cleanup\n'
+    printf 'The Wizard may have installed gcode_shell_command.py and a modified temperature_probe.py.\n'
+    printf 'Other configurations may also use these files.\n'
+    read -r -p "Also clean up only Python files still verified as installer-managed? [y/N] " answer || true
+    [[ "${answer}" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+remove_managed_gcode_shell_command() {
+    local previous_hash=""
+    local current_hash=""
+
+    if [[ ! -f "${GCODE_SHELL_HASH_FILE}" ]]; then
+        info "gcode_shell_command.py has no Wizard ownership record; preserving it."
+        return 0
+    fi
+
+    previous_hash="$(tr -d '[:space:]' < "${GCODE_SHELL_HASH_FILE}")"
+
+    if [[ -L "${DST_GCODE_SHELL_COMMAND}" || ! -f "${DST_GCODE_SHELL_COMMAND}" ]]; then
+        info "gcode_shell_command.py is not a regular Wizard-managed file; preserving it."
+        rm -f -- "${GCODE_SHELL_HASH_FILE}"
+        return 0
+    fi
+
+    current_hash="$(sha256sum "${DST_GCODE_SHELL_COMMAND}" | awk '{print $1}')"
+    if [[ -n "${previous_hash}" && "${current_hash}" == "${previous_hash}" ]]; then
+        backup_path "${DST_GCODE_SHELL_COMMAND}" "gcode_shell_command.py.before_eddy_wizard_uninstall"
+        rm -f -- "${DST_GCODE_SHELL_COMMAND}"
+        ok "Removed Wizard-managed gcode_shell_command.py."
+    else
+        warn "gcode_shell_command.py changed after installation; preserving it."
+    fi
+
+    rm -f -- "${GCODE_SHELL_HASH_FILE}"
+}
+
+restore_managed_temperature_probe() {
+    local previous_hash=""
+    local current_hash=""
+    local upstream_hash=""
+    local restored_hash=""
+    local tmp_upstream=""
+
+    if [[ ! -f "${TEMP_HASH_FILE}" ]]; then
+        info "temperature_probe.py has no Wizard ownership record; preserving it."
+        return 0
+    fi
+
+    previous_hash="$(tr -d '[:space:]' < "${TEMP_HASH_FILE}")"
+
+    if [[ -L "${DST_TEMP_PROBE}" || ! -f "${DST_TEMP_PROBE}" ]]; then
+        info "temperature_probe.py is not a regular Wizard-managed file; preserving it."
+        rm -f -- "${TEMP_HASH_FILE}"
+        return 0
+    fi
+
+    current_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
+    if [[ -z "${previous_hash}" || "${current_hash}" != "${previous_hash}" ]]; then
+        warn "temperature_probe.py changed after installation; preserving it."
+        rm -f -- "${TEMP_HASH_FILE}"
+        return 0
+    fi
+
+    if ! git -C "${KLIPPER_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+        || ! git -C "${KLIPPER_DIR}" cat-file -e 'HEAD:klippy/extras/temperature_probe.py' 2>/dev/null; then
+        warn "Unable to recover the upstream temperature_probe.py from the current Klipper Git HEAD."
+        warn "The Wizard-managed temperature_probe.py will be preserved rather than removed."
+        rm -f -- "${TEMP_HASH_FILE}"
+        return 0
+    fi
+
+    tmp_upstream="$(mktemp)"
+    git -C "${KLIPPER_DIR}" show 'HEAD:klippy/extras/temperature_probe.py' > "${tmp_upstream}" \
+        || {
+            rm -f -- "${tmp_upstream}"
+            warn "Failed to read upstream temperature_probe.py; preserving the installed file."
+            rm -f -- "${TEMP_HASH_FILE}"
+            return 0
+        }
+
+    upstream_hash="$(sha256sum "${tmp_upstream}" | awk '{print $1}')"
+    backup_path "${DST_TEMP_PROBE}" "temperature_probe.py.before_eddy_wizard_uninstall"
+    cat "${tmp_upstream}" > "${DST_TEMP_PROBE}"
+    rm -f -- "${tmp_upstream}"
+
+    restored_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
+    if [[ "${restored_hash}" != "${upstream_hash}" ]]; then
+        die "Failed to verify restored upstream temperature_probe.py."
+    fi
+
+    rm -f -- "${TEMP_HASH_FILE}"
+    ok "Restored temperature_probe.py from the current Klipper Git HEAD."
+}
+
+restart_klipper_after_uninstall() {
+    if command -v systemctl >/dev/null 2>&1; then
+        info "Restarting Klipper to unload the Eddy Tap Wizard..."
+        if sudo systemctl restart klipper; then
+            ok "Klipper restarted."
+        else
+            die "Klipper restart failed. Restart Klipper manually before using the printer."
+        fi
+    else
+        die "systemctl was not found. Klipper must be restarted manually after uninstall."
+    fi
+}
+
+uninstall_wizard() {
+    printf '\n%sUninstall Eddy Tap Wizard%s\n' "${BOLD}" "${RESET}"
+    printf '%s\n' "------------------------------------------------------------"
+    printf 'The uninstall will remove Wizard includes, installer symlinks, and an\n'
+    printf 'unchanged installer-managed eddy_clear_calibration.cfg.\n\n'
+    printf 'The following are preserved:\n'
+    printf '  - eddy.cfg and the native Eddy hardware configuration\n'
+    printf '  - saved Eddy calibration data\n'
+    printf '  - [save_variables] and saved_variables.cfg\n'
+    printf '  - the Git repository checkout\n'
+    printf '  - shared Klipper Python files unless separately approved below\n\n'
+
+    if ! ask_yes_no "Continue with Eddy Tap Wizard uninstall?" "n"; then
+        info "Uninstall cancelled."
+        exit 0
+    fi
+
+    # First remove all active references to the Wizard. This includes the three
+    # Wizard include lines inside a generated user-owned eddy.cfg while leaving
+    # the rest of eddy.cfg intact and active.
+    remove_wizard_integration_from_active_tree
+
+    # Remove only symlinks that still point back to this repository. Foreign
+    # files or links with the same names are preserved.
+    remove_expected_wizard_symlink "${DST_MACROS}" "${SRC_MACROS}" "eddy_macros.cfg"
+    remove_expected_wizard_symlink "${DST_WIZARD}" "${SRC_WIZARD}" "eddy_setup_wizard.cfg"
+    remove_expected_wizard_symlink "${LEGACY_MACROS}" "${SRC_MACROS}" "legacy eddy_macros.cfg"
+    remove_expected_wizard_symlink "${LEGACY_WIZARD}" "${SRC_WIZARD}" "legacy eddy_setup_wizard.cfg"
+
+    # Remove the clear-calibration config only when its ownership hash proves it
+    # is still the unchanged copy installed by this project.
+    remove_managed_clear_config "${DST_CLEAR}" "${CLEAR_CFG_HASH_FILE}" "eddy_clear_calibration.cfg"
+    remove_managed_clear_config "${LEGACY_CLEAR}" "${LEGACY_CLEAR_HASH_FILE}" "legacy eddy_clear_calibration.cfg"
+
+    if ask_python_cleanup; then
+        remove_managed_gcode_shell_command
+        restore_managed_temperature_probe
+    else
+        info "Preserving Klipper Python dependencies."
+        info "Their Wizard ownership records will be cleared."
+        rm -f -- "${GCODE_SHELL_HASH_FILE}" "${TEMP_HASH_FILE}"
+    fi
+
+    # Remove an empty ownership-state directory, but preserve it if another file
+    # is present for any reason.
+    rmdir "${STATE_DIR}" 2>/dev/null || true
+
+    rebuild_cfg_tree
+    if cfg_tree_has_regex '^[[:space:]]*\[include[[:space:]]+(\./)?(eddy_setup_wizard|eddy_macros|eddy_clear_calibration)\.cfg\][[:space:]]*(#.*)?$'; then
+        die "Uninstall verification found an active Eddy Tap Wizard include. Klipper will not be restarted automatically."
+    fi
+
+    printf '\n%sUninstall summary%s\n' "${BOLD}" "${RESET}"
+    printf '%s\n' "------------------------------------------------------------"
+    ok "No active Eddy Tap Wizard include statements remain."
+
+    if [[ -f "${DST_EDDY}" ]]; then
+        ok "User-owned Eddy configuration preserved: ${DST_EDDY}"
+    elif [[ -f "${LEGACY_EDDY_CFG}" ]]; then
+        ok "User-owned legacy Eddy configuration preserved: ${LEGACY_EDDY_CFG}"
+    else
+        info "No project-generated eddy.cfg was found to preserve."
+    fi
+
+    if [[ "${BACKUP_CREATED}" -eq 1 ]]; then
+        info "Uninstall backups created in: ${BACKUP_DIR}"
+    fi
+
+    restart_klipper_after_uninstall
+
+    printf '\n%sEddy Tap Wizard uninstall complete.%s\n' "${GREEN}${BOLD}" "${RESET}"
+    printf 'The native Eddy configuration and calibration data were preserved.\n'
+    printf 'You may delete the repository checkout manually if it is no longer needed:\n\n'
+    printf '  %q\n\n' "${SCRIPT_DIR}"
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
 # Initial discovery
 # ---------------------------------------------------------------------------
 
@@ -1267,6 +1659,10 @@ rebuild_cfg_tree
 scan_eddy_sections
 check_klipper_origin
 report_eddy_state
+
+if [[ "${UNINSTALL}" -eq 1 ]]; then
+    uninstall_wizard
+fi
 
 if [[ "${DETECT_ONLY}" -eq 1 ]]; then
     scan_calibration_reference
