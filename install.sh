@@ -1320,6 +1320,69 @@ replace_placeholder() {
     sed -i "s|{{${token}}}|${escaped}|g" "${file}"
 }
 
+render_clear_calibration_cfg() {
+    local tmp_clear
+    local escaped_script
+
+    printf '\n%sPreparing Eddy clear-calibration configuration...%s\n' "${BOLD}" "${RESET}"
+
+    # 4B-4 only creates a missing rendered config.
+    # Existing-file update/ownership behavior will be handled separately.
+    if [[ -e "${DST_CLEAR}" || -L "${DST_CLEAR}" ]]; then
+        [[ -f "${DST_CLEAR}" ]] \
+            || die "Existing clear-calibration path is not a regular file: ${DST_CLEAR}"
+
+        if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${DST_CLEAR}"; then
+            die "Existing ${DST_CLEAR} still contains the unresolved __EDDY_CLEAR_SCRIPT__ placeholder."
+        fi
+
+        ok "Existing eddy_clear_calibration.cfg detected; preserving it."
+        return 0
+    fi
+
+    tmp_clear="$(mktemp)"
+
+    cp -a -- "${SRC_CLEAR_TEMPLATE}" "${tmp_clear}" \
+        || {
+            rm -f -- "${tmp_clear}"
+            die "Failed to copy Eddy clear-calibration template."
+        }
+
+    escaped_script="${SRC_CLEAR_SCRIPT//\\/\\\\}"
+    escaped_script="${escaped_script//&/\\&}"
+    escaped_script="${escaped_script//|/\\|}"
+
+    sed -i "s|__EDDY_CLEAR_SCRIPT__|${escaped_script}|g" "${tmp_clear}" \
+        || {
+            rm -f -- "${tmp_clear}"
+            die "Failed to render Eddy clear-calibration script path."
+        }
+
+    if grep -Fq '__EDDY_CLEAR_SCRIPT__' "${tmp_clear}"; then
+        rm -f -- "${tmp_clear}"
+        die "Rendered Eddy clear-calibration config still contains __EDDY_CLEAR_SCRIPT__."
+    fi
+
+    if ! grep -Fq "${SRC_CLEAR_SCRIPT}" "${tmp_clear}"; then
+        rm -f -- "${tmp_clear}"
+        die "Rendered Eddy clear-calibration config does not contain the expected script path."
+    fi
+
+    cp -- "${tmp_clear}" "${DST_CLEAR}" \
+        || {
+            rm -f -- "${tmp_clear}"
+            die "Failed to install rendered eddy_clear_calibration.cfg."
+        }
+
+    chmod 0644 "${DST_CLEAR}" 2>/dev/null || true
+    rm -f -- "${tmp_clear}"
+
+    [[ -f "${DST_CLEAR}" ]] \
+        || die "eddy_clear_calibration.cfg installation verification failed."
+
+    ok "Generated Eddy clear-calibration configuration: ${DST_CLEAR}"
+}
+
 validate_can_uuid() {
     local value="$1"
     [[ "${value}" =~ ^[0-9A-Fa-f]{12,32}$ ]]
@@ -1714,6 +1777,14 @@ case "${EDDY_STATE}" in
         CONFIG_MODE="generated"
         ;;
 esac
+
+# ---------------------------------------------------------------------------
+# Generate portable clear-calibration configuration
+# ---------------------------------------------------------------------------
+
+if [[ "${CONFIG_MODE}" != "legacy_keep" ]]; then
+    render_clear_calibration_cfg
+fi
 
 # ---------------------------------------------------------------------------
 # Install the two repo-managed config files as symlinks
