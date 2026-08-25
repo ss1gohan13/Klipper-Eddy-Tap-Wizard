@@ -54,10 +54,13 @@ SRC_MACROS="${SCRIPT_DIR}/printer_data/config/eddy_macros.cfg"
 SRC_WIZARD="${SCRIPT_DIR}/printer_data/config/eddy_setup_wizard.cfg"
 SRC_TEMPLATE_FULL="${SCRIPT_DIR}/printer_data/config/templates/eddy.cfg.template"
 SRC_TEMPLATE_MINIMAL="${SCRIPT_DIR}/printer_data/config/templates/eddy-minimal.cfg.template"
+SRC_CLEAR_TEMPLATE="${SCRIPT_DIR}/printer_data/config/templates/eddy_clear_calibration.cfg.template"
+SRC_CLEAR_SCRIPT="${SCRIPT_DIR}/scripts/clear_eddy_calibration.py"
 SRC_TEMP_PROBE="${SCRIPT_DIR}/klipper/klippy/extras/temperature_probe.py"
 
 DST_MACROS="${CONFIG_DIR}/eddy_macros.cfg"
 DST_WIZARD="${CONFIG_DIR}/eddy_setup_wizard.cfg"
+DST_CLEAR="${CONFIG_DIR}/eddy_clear_calibration.cfg"
 DST_EDDY="${CONFIG_DIR}/eddy.cfg"
 
 # Previous Eddy Tap Wizard releases commonly used this nested layout.
@@ -65,6 +68,7 @@ LEGACY_EDDY_DIR="${CONFIG_DIR}/eddy"
 LEGACY_EDDY_CFG="${LEGACY_EDDY_DIR}/eddy.cfg"
 LEGACY_MACROS="${LEGACY_EDDY_DIR}/eddy_macros.cfg"
 LEGACY_WIZARD="${LEGACY_EDDY_DIR}/eddy_setup_wizard.cfg"
+LEGACY_CLEAR="${LEGACY_EDDY_DIR}/eddy_clear_calibration.cfg"
 
 DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
@@ -315,6 +319,8 @@ if [[ "${DETECT_ONLY}" -eq 0 ]]; then
     [[ -f "${SRC_WIZARD}" ]] || die "Repository file missing: ${SRC_WIZARD}"
     [[ -f "${SRC_TEMPLATE_FULL}" ]] || die "Repository file missing: ${SRC_TEMPLATE_FULL}"
     [[ -f "${SRC_TEMPLATE_MINIMAL}" ]] || die "Repository file missing: ${SRC_TEMPLATE_MINIMAL}"
+    [[ -f "${SRC_CLEAR_TEMPLATE}" ]] || die "Repository file missing: ${SRC_CLEAR_TEMPLATE}"
+    [[ -f "${SRC_CLEAR_SCRIPT}" ]] || die "Repository file missing: ${SRC_CLEAR_SCRIPT}"
     [[ -f "${SRC_TEMP_PROBE}" ]] || die "Repository file missing: ${SRC_TEMP_PROBE}"
 
     # Verify this looks like the expected patched temperature_probe.py.
