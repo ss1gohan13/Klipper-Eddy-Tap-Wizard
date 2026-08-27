@@ -122,6 +122,14 @@ else
     RESET=""
 fi
 
+clear_screen() {
+    # Keep interactive SSH/terminal runs clean without emitting ANSI control
+    # sequences into redirected output or non-interactive logs.
+    if [[ -t 1 ]]; then
+        printf '\033[2J\033[3J\033[H'
+    fi
+}
+
 info()  { printf '%s[INFO]%s %s\n' "${BLUE}" "${RESET}" "$*"; }
 ok()    { printf '%s[ OK ]%s %s\n' "${GREEN}" "${RESET}" "$*"; }
 warn()  { printf '%s[WARN]%s %s\n' "${YELLOW}" "${RESET}" "$*"; }
@@ -269,6 +277,8 @@ if [[ "${AFTER_PULL}" -ne 1 \
    && "${DO_UPDATE}" -eq 0 \
    && "${DETECT_ONLY}" -eq 0 \
    && "${UNINSTALL}" -eq 0 ]]; then
+    clear_screen
+
     printf '\n%sChoose action%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
     printf '  1) Install / Repair\n'
@@ -287,6 +297,8 @@ fi
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
+
+clear_screen
 
 printf '\n%s%s Installer%s\n' "${BOLD}" "${PROJECT_NAME}" "${RESET}"
 printf '%s\n\n' "------------------------------------------------------------"
