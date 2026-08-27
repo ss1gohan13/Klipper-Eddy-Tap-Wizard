@@ -571,7 +571,6 @@ report_discovery() {
     printf '\n%sConfiguration discovery%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
     printf 'Active config files:          %d\n' "${#ACTIVE_CFG_FILES[@]}"
-	printf 'Active config files:          %d\n' "${#ACTIVE_CFG_FILES[@]}"
 	printf 'All config files discovered:  %d\n' "${#ALL_CFG_FILES[@]}"
 	printf 'Historical backups ignored:   %d\n' "${#HISTORICAL_CFG_FILES[@]}"
 	printf 'Active native Eddy probes:    %d\n' "${#ACTIVE_NATIVE_PROBE_RECORDS[@]}"
@@ -1904,5 +1903,11 @@ restart_klipper
 
 printf '\n%sInstallation complete.%s\n' "${GREEN}${BOLD}" "${RESET}"
 printf 'Canonical Eddy directory:\n  %s\n' "${EDDY_DIR}"
-[[ "${BACKUP_CREATED}" -eq 1 ]] && printf 'Backups:\n  %s\n' "${BACKUP_DIR}"
-printf '\n'
+
+if [[ "${BACKUP_CREATED}" -eq 1 ]]; then
+    printf 'Backups:\n  %s\n' "${BACKUP_DIR}"
+fi
+
+printf '\n%sNext step:%s\n' "${BOLD}" "${RESET}"
+printf 'Run the following command in your Klipper console to begin Eddy calibration:\n\n'
+printf '  EDDY_SETUP\n\n'
