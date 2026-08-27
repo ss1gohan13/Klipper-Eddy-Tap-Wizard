@@ -1,1325 +1,805 @@
-:warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning:
+# Klipper Eddy Tap Wizard
 
-> [!IMPORTANT]
-> This project is intended to be used with the latest stable release of **mainline Klipper**.
->
-> Before installing or running the Eddy Tap Wizard, update Klipper to the latest available release.
->
-> Older Klipper versions may be missing Eddy Tap functionality or other required changes used by this project.
+## 1. Overview
 
-:warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning:
+<details>
+<summary><strong>What This Project Does</strong></summary>
 
-# Klipper Eddy Tap Setup Wizard
+Klipper Eddy Tap Wizard provides a guided setup and calibration workflow for native Klipper Eddy current probes.
 
-A guided setup and calibration workflow for Klipper Eddy current probes using Eddy Tap.
+The goal is to simplify the full Eddy setup process into a structured sequence that walks the user through:
 
-The goal of this project is to simplify first-time Eddy setup, recalibration, and ongoing maintenance by walking the user through the required calibration steps in the correct order while using Klipper's own calibration commands wherever possible.
+- LDC drive current calibration
+- Main Eddy Z / frequency calibration
+- Eddy Tap calibration
+- Optional thermal compensation
+- Saving and restarting between calibration stages
+- Reviewing the final setup state
 
-The project includes an installer that can create a new Eddy configuration, integrate with an existing native Klipper Eddy configuration, update the Wizard, manage the required Klipper Python extras, and safely preserve user-owned configuration files.
+The Wizard is designed around a single native Klipper Eddy probe and a canonical Eddy configuration layout.
 
----
+</details>
 
-# What This Project Does
+<details>
+<summary><strong>Requirements</strong></summary>
 
-The Wizard guides the user through:
+The Wizard expects:
 
-1. **LDC drive-current calibration**
-2. **Main Eddy Z / frequency calibration**
-3. **Eddy Tap threshold calibration**
-4. **Thermal drift compensation**
-5. **SAVE_CONFIG / restart progression**
-6. **Final calibration summary**
+- Current mainline Klipper
+- One native `[probe_eddy_current ...]` probe
+- `[respond]`
+- `[force_move]` with force moves enabled
+- `[bed_mesh]`
+- `[save_variables]`
+- A valid `zero_reference_position` inside `[bed_mesh]`
 
-The Wizard automatically detects a single configured:
+</details>
 
-```ini
-[probe_eddy_current <name>]
-```
+<details>
+<summary><strong>Supported Configurations</strong></summary>
 
-The probe does not need to be named `eddy`.
+The installer is designed to support:
 
-For example:
+- Fresh native Klipper Eddy installations
+- USB-connected Eddy probes
+- CAN-connected Eddy probes
+- Existing native Klipper Eddy configurations
+- Existing dedicated `eddy.cfg` files
+- Existing canonical `config/eddy/` Wizard layouts
 
-```ini
-[probe_eddy_current eddy]
-```
+The installer detects the currently active Klipper configuration tree before making changes.
 
-or:
+</details>
 
-```ini
-[probe_eddy_current probe1]
-```
+<details>
+<summary><strong>Important Limitations</strong></summary>
 
-The Wizard uses the detected probe name automatically.
+The Wizard expects exactly one active native Eddy probe.
 
-> The installer currently supports one native Eddy probe at a time.
+Conflicting or ambiguous probe configurations may require manual cleanup before installation can continue.
 
----
+Examples include:
 
-# Features
+- Multiple active native Eddy probes
+- Active Eddy-NG configurations
+- Native Eddy and Eddy-NG active at the same time
+- Unsupported legacy helper configurations that cannot be safely converted automatically
 
-- Guided setup through Klipper/Mainsail/Fluidd prompts
-- Automatic Eddy probe-name detection
-- Fresh Eddy configuration generation
-- Full and Minimal configuration templates
-- USB and CAN Eddy support for newly generated configurations
-- Support for existing mainline/native Klipper Eddy configurations
-- Support for previous Klipper Eddy Tap Wizard installations
-- Safe legacy `config/eddy/` layout migration
-- Initial LDC calibration before normal Eddy Z homing is available
-- Native Klipper manual-probe controls for initial Z positioning
-- Native Klipper paper-test calibration
-- Automatic Eddy Tap calibration:
-  - `guess`
-  - `refine`
-  - `verify`
-- Optional thermal drift calibration
-- Default thermal target of **80°C**
-- Custom thermal target support:
-
-```text
-EDDY_SETUP TARGET=<temperature>
-```
-
-- Thermal calibration controls:
-  - **Force Next Sample**
-  - **Finish at Current Temperature**
-  - **Abort Thermal Calibration**
-- Setup state survives `SAVE_CONFIG` restarts
-- Automatic continuation after required restarts
-- Final calibration summary
-- Eddy calibration reset command:
-
-```text
-EDDY_CLEAR_CALIBRATION
-```
-
-- Installer-managed backups
-- Safe update support through:
-
-```bash
-./install.sh --update
-```
+</details>
 
 ---
 
-# Supported Configurations
+## 2. Installation & Management
 
-The installer currently supports:
+<details>
+<summary><strong>Installation</strong></summary>
 
-- Fresh mainline/native Klipper Eddy installations
-- Existing mainline/native:
-
-```ini
-[probe_eddy_current <name>]
-```
-
-configurations
-
-- Previous Klipper Eddy Tap Wizard installations using the older:
-
-```text
-~/printer_data/config/eddy/
-```
-
-layout
-
-- USB Eddy connections
-- CAN Eddy connections
-
-For fresh installations, the installer can generate either a **Full** or **Minimal** Eddy configuration.
-
----
-
-# Unsupported Configurations
-
-The installer intentionally stops before modifying printer or Klipper files when it detects configurations that are not currently supported.
-
-These include:
-
-- **Eddy-NG**
-- **BIGTREETECH/Rappetor-style legacy Eddy configurations**
-- Mixed native Eddy + Eddy-NG configurations
-- Multiple configured native Eddy probes
-
-Automatic conversion of these configurations is not currently implemented.
-
-If an unsupported configuration is detected, the installer reports the condition and exits without continuing installation.
-
----
-
-# Repository Structure
-
-```text
-Klipper-Eddy-Tap-Wizard/
-│
-├── install.sh
-├── README.md
-│
-├── printer_data/
-│   └── config/
-│       ├── eddy_macros.cfg
-│       ├── eddy_setup_wizard.cfg
-│       └── templates/
-│           ├── eddy.cfg.template
-│           ├── eddy-minimal.cfg.template
-│           └── eddy_clear_calibration.cfg.template
-│
-├── scripts/
-│   └── clear_eddy_calibration.py
-│
-└── klipper/
-    └── klippy/
-        └── extras/
-            ├── gcode_shell_command.py
-            └── temperature_probe.py
-```
-
-## `eddy_setup_wizard.cfg`
-
-Contains the guided setup system, prompt handling, setup state, automatic resume logic, and calibration completion tracking.
-
-## `eddy_macros.cfg`
-
-Contains the worker macros used by the Wizard, including:
-
-```text
-EDDY_LDC_PREP
-EDDY_LDC_CALIBRATE
-EDDY_CURRENT_PREP
-EDDY_CURRENT_CALIBRATE
-EDDY_TAP_CALIBRATE
-EDDY_TEMP_CALIBRATE
-SAVE_EDDY_TAP_OFFSET
-SET_Z_FROM_PROBE
-```
-
-## `temperature_probe.py`
-
-Contains the modified Klipper temperature-probe implementation currently required by this project for Eddy Tap thermal calibration behavior.
-
-## `gcode_shell_command.py`
-
-Provides the Klipper:
-
-```text
-RUN_SHELL_COMMAND
-```
-
-extension used by:
-
-```text
-EDDY_CLEAR_CALIBRATION
-```
-
-## `clear_eddy_calibration.py`
-
-Safely removes the saved Eddy calibration values managed by `SAVE_CONFIG` while preserving unrelated printer configuration.
-
----
-
-# Requirements
-
-The Wizard expects the following Klipper features to be available:
-
-```ini
-[respond]
-
-[force_move]
-enable_force_move: True
-```
-
-A valid:
-
-```ini
-[bed_mesh]
-```
-
-configuration is also required.
-
-Eddy calibration requires:
-
-```ini
-zero_reference_position: X, Y
-```
-
-inside `[bed_mesh]`.
-
-The installer detects this value and can help configure it when necessary.
-
-The Wizard also requires one valid:
-
-```ini
-[save_variables]
-```
-
-section.
-
-If none exists, the installer can create one automatically.
-
----
-
-# Installation
-
-## 1. SSH Into the Klipper Host
-
-Connect to the Linux host running Klipper.
-
-Run the installer as the normal Klipper user.
-
-> Do **not** run `install.sh` itself with `sudo`.
-
----
-
-## 2. Clone the Repository
-
-```bash
-cd ~
-git clone https://github.com/ss1gohan13/Klipper-Eddy-Tap-Wizard.git
-```
-
-Then enter the repository:
-
-```bash
-cd ~/Klipper-Eddy-Tap-Wizard
-```
-
----
-
-## 3. Run the Installer
+Run the installer from the project directory:
 
 ```bash
 ./install.sh
 ```
 
-If executable permissions were stripped during a ZIP download, Windows transfer, or another copy operation, use:
-
-```bash
-bash install.sh
-```
-
----
-
-# What the Installer Does
-
-The installer:
-
-- Discovers the active Klipper configuration tree starting from `printer.cfg`
-- Detects existing native Eddy configurations
-- Detects previous Eddy Tap Wizard installations
-- Detects unsupported BTT/Rappetor and Eddy-NG configurations
-- Creates a new Eddy configuration when one does not already exist
-- Supports Full and Minimal templates
-- Supports USB and CAN for generated configurations
-- Preserves existing user-owned `eddy.cfg`
-- Validates `[bed_mesh]`
-- Validates or configures `zero_reference_position`
-- Installs:
+The installer menu provides:
 
 ```text
-eddy_macros.cfg
-eddy_setup_wizard.cfg
-eddy_clear_calibration.cfg
+1) Install / Repair
+2) Update
+3) Uninstall
+4) Detect only
 ```
 
-- Detects/adds `[save_variables]`
-- Installs or validates `gcode_shell_command.py`
-- Installs or validates the required `temperature_probe.py`
-- Creates backups before managed files are replaced or configuration files are modified
-- Verifies the resulting installation before restarting Klipper
-- Restarts Klipper after a successful installation
+During installation, the installer:
 
----
+- Scans the active Klipper configuration tree
+- Searches for existing Eddy-related configuration
+- Identifies the current Eddy configuration state
+- Preserves user-owned configuration whenever possible
+- Creates backups before modifying configuration
+- Normalizes the Wizard into the canonical `config/eddy/` layout
+- Installs the Wizard support files
+- Verifies `zero_reference_position`
+- Verifies required Python dependencies
+- Restarts Klipper after successful installation
 
-# Fresh Installation
+<details>
+<summary>↳ <strong>Fresh Installation</strong></summary>
 
-When no active Eddy configuration is detected, the installer can create:
+For a fresh Eddy setup, the installer prompts for the information it cannot safely determine automatically.
 
-```text
-~/printer_data/config/eddy.cfg
-```
+This may include:
 
-You will be asked to choose:
-
-```text
-1) Full
-2) Minimal
-```
-
-The **Full** template includes the core Eddy configuration plus additional commented examples.
-
-The **Minimal** template contains the core Eddy, temperature-compensation, and bed-mesh configuration.
-
-The installer then asks whether Eddy is connected using:
-
-```text
-1) USB
-2) CAN
-```
-
-For USB, you will provide the Eddy serial path.
-
-Example:
-
-```text
-/dev/serial/by-id/usb-Klipper_rp2040_XXXXXXXX-if00
-```
-
-For CAN, you will provide the Eddy CAN UUID.
-
-The installer also asks for printer-specific values including:
-
+- USB serial path or CAN UUID
 - Probe X offset
 - Probe Y offset
-- Zero reference X/Y
-- Bed-mesh minimum X/Y
-- Bed-mesh maximum X/Y
-- Calibration bed temperature
-- Calibration extruder temperature
-- Maximum validation temperature
+- Bed mesh geometry
+- Zero reference position
+- Temperature compensation defaults
 
-These values are used to render the new `eddy.cfg`.
-
----
-
-# Your `eddy.cfg` Is User-Owned
-
-This is an important installer rule.
-
-Once:
+The generated user-owned Eddy configuration is placed at:
 
 ```text
-~/printer_data/config/eddy.cfg
+~/printer_data/config/eddy/eddy.cfg
 ```
 
-has been generated or an existing `eddy.cfg` has been adopted, it is considered **user-owned**.
+</details>
 
-Normal project updates do **not** regenerate or overwrite it.
+<details>
+<summary>↳ <strong>Existing Native Eddy Installation</strong></summary>
 
-This allows you to customize your Eddy configuration without having later Wizard updates erase those changes.
+If an existing native `[probe_eddy_current ...]` configuration is found, the installer attempts to preserve the existing configuration rather than replacing it.
 
----
+Dedicated Eddy configuration files may be moved into the canonical `config/eddy/` directory.
 
-# Existing Native Eddy Configuration
+If the Eddy probe exists inside a mixed printer configuration file, only explicitly selected Eddy-related sections should be migrated.
 
-If you already have a valid mainline Klipper configuration containing:
+</details>
 
-```ini
-[probe_eddy_current <name>]
-```
+</details>
 
-the installer can use it in-place.
+<details>
+<summary><strong>Update</strong></summary>
 
-Your existing Eddy hardware configuration is preserved.
-
-The installer adds the Wizard components around the existing configuration rather than replacing the probe or MCU settings.
-
-This is useful for users who already have a functional Eddy installation and only want the guided Tap setup/calibration system.
-
----
-
-# Previous Wizard Installations
-
-Older versions of this project may use:
-
-```text
-~/printer_data/config/eddy/
-```
-
-with files such as:
-
-```text
-eddy.cfg
-eddy_macros.cfg
-eddy_setup_wizard.cfg
-```
-
-When this layout is detected, the installer can offer:
-
-```text
-1) Keep the existing config/eddy/ layout
-2) Migrate to the flat config/ layout
-```
-
-## Keep Existing Layout
-
-The existing nested configuration remains active.
-
-The installer updates the Wizard integration around that layout without forcing migration.
-
-## Migrate to Flat Layout
-
-The installer can migrate the configuration to:
-
-```text
-~/printer_data/config/eddy.cfg
-~/printer_data/config/eddy_macros.cfg
-~/printer_data/config/eddy_setup_wizard.cfg
-~/printer_data/config/eddy_clear_calibration.cfg
-```
-
-Before migration, the existing legacy Eddy directory is backed up.
-
-The old directory is removed only after the new configuration has been verified as active.
-
-If migration cannot be performed safely, the installer stops rather than deleting the old configuration.
-
----
-
-# Backups
-
-Installer backups are stored under:
-
-```text
-~/printer_data/config/eddy_wizard_backups/<timestamp>/
-```
-
-Depending on the operation, backups may include:
-
-- `printer.cfg`
-- Existing Wizard files
-- `temperature_probe.py`
-- Legacy `config/eddy/`
-- Clear-calibration configuration
-
-The installer creates backups before managed destructive changes.
-
----
-
-# `[save_variables]`
-
-The Wizard requires one active `[save_variables]` section.
-
-The installer searches the active Klipper config tree first.
-
-If one already exists, it is preserved.
-
-If none exists, the installer can create:
-
-```ini
-[save_variables]
-filename: ~/printer_data/config/saved_variables.cfg
-```
-
-The actual path follows the configured Klipper config directory when installer path overrides are used.
-
-Do not create multiple `[save_variables]` sections.
-
----
-
-# Updating the Wizard
-
-After installation:
+Run:
 
 ```bash
-cd ~/Klipper-Eddy-Tap-Wizard
 ./install.sh --update
 ```
 
-The installer:
-
-1. Determines the currently checked-out Git branch
-2. Performs a fast-forward-only pull
-3. Re-runs the updated installer
-4. Updates project-managed files when appropriate
-5. Preserves user-owned configuration
-6. Re-validates the installation
-7. Restarts Klipper
-
-Your user-owned:
+or select:
 
 ```text
-eddy.cfg
+2) Update
 ```
 
-is not regenerated during a normal update.
+from the installer menu.
 
----
+The updater performs a fast-forward Git update of the currently checked-out branch and then reruns the installer.
 
-# Useful Installer Options
+User-owned `eddy.cfg` content is preserved during normal updates.
 
-## Detect Only
+</details>
+
+<details>
+<summary><strong>Uninstallation</strong></summary>
+
+Run:
+
+```bash
+./install.sh --uninstall
+```
+
+or select:
+
+```text
+3) Uninstall
+```
+
+from the installer menu.
+
+The uninstaller removes Wizard integration while preserving the user's native Eddy configuration.
+
+Items intended to remain include:
+
+- `eddy.cfg`
+- `[mcu eddy]`
+- `[probe_eddy_current ...]`
+- `[temperature_probe ...]`
+- `[temperature_sensor ...]`
+- `[bed_mesh]`
+- `zero_reference_position`
+- `[save_variables]`
+- Existing Eddy calibration values
+
+Wizard-managed support files may be removed or restored as appropriate.
+
+</details>
+
+<details>
+<summary><strong>Detect Only</strong></summary>
+
+Run:
 
 ```bash
 ./install.sh --detect-only
 ```
 
-This scans and reports the current Eddy/Klipper configuration without modifying printer configuration or Klipper files.
-
-This is useful for checking how the installer classifies an existing setup before installation.
-
-## Automatically Accept Normal Yes/No Prompts
-
-```bash
-./install.sh --yes
-```
-
-This automatically accepts normal yes/no prompts.
-
-> Fresh `eddy.cfg` generation still requires interactive printer geometry and connection information. Do not use `--yes` for a new Eddy configuration.
-
-## Update
-
-```bash
-./install.sh --update
-```
-
-## Update With Automatic Yes/No Responses
-
-```bash
-./install.sh --update --yes
-```
-
-## Help
-
-```bash
-./install.sh --help
-```
-
----
-
-## Uninstalling the Wizard
-
-The installer includes a safe uninstall option.
-
-Run the installer normally:
-
-```bash
-cd ~/Klipper-Eddy-Tap-Wizard
-./install.sh
-```
-
-Then Choose:
-
-3) Uninstall
-
-Alternatively
-
-via ssh
-
-```./install.sh --uninstall```
-
----
-
-# Starting the Wizard
-
-After installation and a successful Klipper restart, run:
+or select:
 
 ```text
+4) Detect only
+```
+
+from the installer menu.
+
+Detect-only mode inspects the configuration without modifying it.
+
+It reports:
+
+- Active configuration files
+- Configuration files analyzed
+- Historical backups ignored
+- Active native Eddy probes
+- Active Eddy-NG probes
+- Inactive Eddy migration candidates
+- Final Eddy classification
+
+</details>
+
+---
+
+## 3. Using the Wizard
+
+<details>
+<summary><strong>Starting the Wizard</strong></summary>
+
+After installation, start the guided setup from the Klipper console with:
+
+```gcode
 EDDY_SETUP
 ```
 
-The Wizard checks the current configuration and determines the first missing calibration.
+To begin the Wizard with a target temperature:
 
-A fresh setup normally progresses through:
-
-```text
-LDC Calibration
-      ↓
-Main Eddy Z Calibration
-      ↓
-Eddy Tap Calibration
-      ↓
-Thermal Drift Calibration
-      ↓
-Setup Complete
+```gcode
+EDDY_SETUP TARGET=<temperature>
 ```
-
-If no matching temperature probe is configured, the thermal step is skipped.
-
----
-
-# Custom Thermal Target
-
-The default thermal calibration target is:
-
-```text
-80°C
-```
-
-To specify another target:
-
-```text
-EDDY_SETUP TARGET=70
-```
-
-or:
-
-```text
-EDDY_SETUP TARGET=90
-```
-
-The selected target survives the `SAVE_CONFIG` restarts that occur while the Wizard is active.
-
-When setup completes or is cancelled, the stored target is cleared.
-
-The next fresh setup returns to the default **80°C** unless another target is supplied.
-
----
-
-# Setup Flow
-
-## 1. LDC Drive-Current Calibration
-
-On a fresh Eddy installation, the main Eddy Z calibration does not yet exist, so normal Eddy-based Z homing may not be available.
-
-The Wizard prepares the printer for the initial LDC setup.
-
-Typical flow:
-
-```text
-EDDY_SETUP
-      ↓
-Begin LDC Setup
-      ↓
-Home X/Y
-      ↓
-Move Eddy sensor near machine center
-      ↓
-Establish temporary Z coordinate
-      ↓
-Native Klipper Z-positioning interface
-      ↓
-Position Eddy approximately 20 mm above the bed
-      ↓
-ACCEPT
-      ↓
-Continue LDC Calibration
-      ↓
-LDC_CALIBRATE_DRIVE_CURRENT
-```
-
-After the native Z-positioning interface is accepted, the Wizard presents the continuation prompt for LDC calibration.
-
-When calibration completes successfully, the Wizard detects the pending result and presents:
-
-```text
-Save & Continue
-```
-
-This runs `SAVE_CONFIG`, restarts Klipper, and allows the Wizard to resume at the next required step.
-
----
-
-## 2. Main Eddy Z / Frequency Calibration
-
-The Wizard next performs the main Eddy calibration using:
-
-```text
-PROBE_EDDY_CURRENT_CALIBRATE
-```
-
-This invokes Klipper's normal manual-probe / paper-test interface.
-
-Use the Klipper adjustment controls until the nozzle-to-bed distance is correct and then select:
-
-```text
-ACCEPT
-```
-
-The resulting Eddy frequency-to-height calibration is staged for `SAVE_CONFIG`.
-
-The Wizard then presents:
-
-```text
-Save & Continue
-```
-
----
-
-## 3. Eddy Tap Calibration
-
-After the main Eddy calibration has been saved, the Wizard performs automatic Tap calibration.
-
-The included wrapper runs:
-
-```text
-PROBE_EDDY_CURRENT_TAP_CALIBRATE TAP=guess
-```
-
-followed by:
-
-```text
-PROBE_EDDY_CURRENT_TAP_CALIBRATE TAP=refine
-```
-
-and then:
-
-```text
-PROBE_EDDY_CURRENT_TAP_CALIBRATE TAP=verify
-```
-
-The printer re-homes Z between Tap calibration stages.
-
-When the calibrated Tap values are ready, the Wizard presents:
-
-```text
-Save & Continue
-```
-
----
-
-## 4. Thermal Drift Calibration
-
-If a matching:
-
-```ini
-[temperature_probe <eddy name>]
-```
-
-exists, thermal drift compensation becomes the final setup step.
-
-The Wizard starts:
-
-```text
-TEMPERATURE_PROBE_CALIBRATE PROBE=<name> TARGET=<target> METHOD=tap
-```
-
-The default target is:
-
-```text
-80°C
-```
-
-During thermal calibration, three additional controls are available.
-
-### Force Next Sample
-
-```text
-TEMPERATURE_PROBE_NEXT
-```
-
-Forces the next thermal drift sample before the normal temperature step is reached.
-
-### Finish at Current Temperature
-
-```text
-TEMPERATURE_PROBE_COMPLETE
-```
-
-Attempts to complete thermal calibration using the samples already collected.
-
-Klipper still requires enough valid samples to construct the drift calibration.
-
-This option can be useful if the Eddy temperature plateaus below the requested target.
-
-### Abort Thermal Calibration
-
-```text
-ABORT
-```
-
-Discards the current thermal calibration and returns the Wizard to the thermal setup stage.
-
----
-
-# Matching Eddy Temperature Probe
-
-For thermal compensation, the Eddy temperature probe must use the same name as the Eddy probe.
 
 Example:
 
+```gcode
+EDDY_SETUP TARGET=60
+```
+
+</details>
+
+<details>
+<summary><strong>Calibration Workflow</strong></summary>
+
+The Wizard guides the user through the required Eddy calibration stages in sequence.
+
+<details>
+<summary>↳ <strong>1. LDC Drive Current Calibration</strong></summary>
+
+This stage prepares and calibrates the Eddy probe's LDC drive current.
+
+Relevant commands include:
+
+```gcode
+EDDY_LDC_PREP
+EDDY_LDC_CALIBRATE
+```
+
+The Wizard prompts the user through the required positioning and calibration process.
+
+</details>
+
+<details>
+<summary>↳ <strong>2. Main Eddy Z / Frequency Calibration</strong></summary>
+
+This stage performs the main native Klipper Eddy calibration.
+
+Relevant commands include:
+
+```gcode
+EDDY_CURRENT_PREP
+EDDY_CURRENT_CALIBRATE
+```
+
+This establishes the relationship between probe frequency and Z position.
+
+</details>
+
+<details>
+<summary>↳ <strong>3. Eddy Tap Calibration</strong></summary>
+
+This stage calibrates Eddy Tap behavior.
+
+Relevant command:
+
+```gcode
+EDDY_TAP_CALIBRATE
+```
+
+The resulting Tap calibration is used for contact-based Z probing.
+
+</details>
+
+<details>
+<summary>↳ <strong>4. Thermal Compensation</strong></summary>
+
+Thermal compensation is optional and depends on the probe hardware and temperature sensing available in the installation.
+
+Relevant command:
+
+```gcode
+EDDY_TEMP_CALIBRATE
+```
+
+The Wizard guides the user through the thermal calibration process when applicable.
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>Saving Calibration</strong></summary>
+
+The Wizard uses Klipper's normal configuration save and restart flow.
+
+When instructed, run:
+
+```gcode
+SAVE_CONFIG
+```
+
+After Klipper restarts, continue with the next Wizard step.
+
+Tap offset saving is handled with:
+
+```gcode
+SAVE_EDDY_TAP_OFFSET
+```
+
+</details>
+
+<details>
+<summary><strong>Clearing or Re-running Calibration</strong></summary>
+
+Calibration can be cleared with:
+
+```gcode
+EDDY_CLEAR_CALIBRATION
+```
+
+Individual setup stages can also be rerun directly using the corresponding Wizard commands.
+
+This is useful when only one calibration stage needs to be repeated instead of restarting the entire process.
+
+</details>
+
+---
+
+## 4. Configuration
+
+<details>
+<summary><strong>Canonical Directory Layout</strong></summary>
+
+The Wizard uses one canonical configuration layout:
+
+```text
+~/printer_data/config/eddy/
+├── eddy.cfg
+├── eddy_macros.cfg
+├── eddy_setup_wizard.cfg
+└── eddy_clear_calibration.cfg
+```
+
+`printer.cfg` should activate the configuration with:
+
+```ini
+[include eddy/eddy.cfg]
+```
+
+Inside `eddy/eddy.cfg`, the Wizard support files are included with:
+
+```ini
+[include eddy_setup_wizard.cfg]
+[include eddy_macros.cfg]
+[include eddy_clear_calibration.cfg]
+```
+
+</details>
+
+<details>
+<summary><strong>Eddy Configuration</strong></summary>
+
+<details>
+<summary>↳ <strong>MCU Configuration</strong></summary>
+
+The Eddy MCU may be connected by USB or CAN.
+
+The installer collects the required connection information during fresh installation.
+
+Typical USB configurations use a serial path.
+
+Typical CAN configurations use a CAN UUID.
+
+</details>
+
+<details>
+<summary>↳ <strong>Probe Configuration</strong></summary>
+
+The native Klipper Eddy probe uses:
+
+```ini
+[probe_eddy_current <name>]
+```
+
+The default Wizard-generated probe name is typically:
+
 ```ini
 [probe_eddy_current eddy]
-...
+```
+
+Probe X and Y offsets are collected during fresh installation.
+
+Existing native configurations should be preserved whenever possible.
+
+</details>
+
+<details>
+<summary>↳ <strong>Temperature Configuration</strong></summary>
+
+Temperature support may use:
+
+```ini
+[temperature_sensor eddy]
 ```
 
 and:
 
 ```ini
 [temperature_probe eddy]
-sensor_type: Generic 3950
-sensor_pin: eddy:gpio26
-
-calibration_position: 117.5,117.5,5
-calibration_bed_temp: 95
-calibration_extruder_temp: 150
-extruder_heating_z: 10
-max_validation_temp: 100
 ```
 
-The names must match:
+Thermal compensation requires compatible temperature sensing hardware.
 
-```text
-probe_eddy_current eddy
-temperature_probe eddy
+</details>
+
+</details>
+
+<details>
+<summary><strong>Bed Mesh & Zero Reference</strong></summary>
+
+The Wizard requires an active `[bed_mesh]` section with:
+
+```ini
+zero_reference_position: X, Y
 ```
 
-If no matching temperature probe exists, the Wizard completes after Eddy Tap calibration.
+If `[bed_mesh]` already exists, the installer preserves the existing section.
+
+If `zero_reference_position` is missing, the installer prompts for it and offers to add it.
+
+If no active `[bed_mesh]` exists during a fresh installation, the installer can generate a minimal bed mesh configuration using the supplied printer geometry.
+
+</details>
+
+<details>
+<summary><strong>Optional Printer Sections</strong></summary>
+
+The canonical `eddy.cfg` template may contain commented reference examples for compatible printer sections.
+
+The installer can optionally consolidate existing active sections into `eddy.cfg`.
+
+<details>
+<summary>↳ <strong>bed_screws</strong></summary>
+
+Existing `[bed_screws]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+<details>
+<summary>↳ <strong>screws_tilt_adjust</strong></summary>
+
+Existing `[screws_tilt_adjust]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+<details>
+<summary>↳ <strong>safe_z_home</strong></summary>
+
+Existing `[safe_z_home]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+<details>
+<summary>↳ <strong>homing_override</strong></summary>
+
+Existing `[homing_override]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+<details>
+<summary>↳ <strong>z_tilt</strong></summary>
+
+Existing `[z_tilt]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+<details>
+<summary>↳ <strong>quad_gantry_level</strong></summary>
+
+Existing `[quad_gantry_level]` configuration may remain in its current file or optionally be moved into `eddy.cfg`.
+
+</details>
+
+</details>
 
 ---
 
-# Setup Completion
+## 5. Advanced / Technical Reference
 
-After all applicable calibrations have been saved, the Wizard displays a final summary.
+<details>
+<summary><strong>Installer Discovery</strong></summary>
 
-Depending on the installed hardware and saved data, the summary may include values such as:
+<details>
+<summary>↳ <strong>Active Configuration Tree</strong></summary>
+
+The installer begins with `printer.cfg` and recursively follows active Klipper `[include ...]` directives.
+
+Active files are always inspected, even if their filenames resemble backup files.
+
+This determines what Klipper is actually using.
+
+</details>
+
+<details>
+<summary>↳ <strong>Recursive Configuration Scan</strong></summary>
+
+The installer also scans the configuration directory for inactive `.cfg` files that may contain Eddy-related configuration.
+
+This broader scan is used for migration and cleanup detection.
+
+</details>
+
+<details>
+<summary>↳ <strong>Historical Backup Filtering</strong></summary>
+
+Inactive historical configuration backups are excluded before expensive Eddy-content analysis.
+
+Examples include:
 
 ```text
-LDC drive current: <value>
-Tap threshold: <value>
-
-Eddy Z calibration temp: <value>C
-Thermal target: <value>C
-Thermal calibration minimum temp: <value>C
-Thermal compensation: OK
+printer-YYYYMMDD_HHMMSS.cfg
+*.bak
+*.backup
+*.old
+*.orig
 ```
 
-If no matching Eddy temperature probe exists:
+Backup and archive directories are also filtered when appropriate.
+
+Active configuration files are never skipped solely because they look like backups.
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>Configuration Migration</strong></summary>
+
+<details>
+<summary>↳ <strong>Dedicated Eddy Configurations</strong></summary>
+
+A dedicated Eddy configuration can be moved into:
 
 ```text
-Thermal compensation: Not applicable
+~/printer_data/config/eddy/eddy.cfg
 ```
 
-Use:
+The installer creates backups before moving configuration.
+
+Old exact include references are removed when the canonical include is activated.
+
+</details>
+
+<details>
+<summary>↳ <strong>Mixed Configuration Files</strong></summary>
+
+If the native Eddy probe is defined inside a mixed printer configuration file, the installer avoids moving unrelated printer configuration.
+
+Only Eddy-related or explicitly selected compatible sections should be migrated.
+
+</details>
+
+<details>
+<summary>↳ <strong>Optional Section Consolidation</strong></summary>
+
+Compatible active printer sections can optionally be moved into `eddy.cfg`.
+
+The default behavior is to leave them where they are unless the user chooses to consolidate them.
+
+Before migration:
+
+- The source file is backed up
+- `eddy.cfg` is backed up
+- The exact active section is copied
+- The commented template example is replaced
+- The original active section is removed
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>File Ownership & Updates</strong></summary>
+
+The Wizard distinguishes between installer-managed files and user-owned configuration.
+
+User-owned:
 
 ```text
-Finish
+eddy/eddy.cfg
 ```
 
-to close the Wizard.
+Wizard-managed support files:
+
+```text
+eddy/eddy_macros.cfg
+eddy/eddy_setup_wizard.cfg
+eddy/eddy_clear_calibration.cfg
+```
+
+Normal updates should preserve user-owned Eddy configuration.
+
+Installer-managed files may be updated when the project changes.
+
+</details>
+
+<details>
+<summary><strong>Python Modifications</strong></summary>
+
+<details>
+<summary>↳ <strong>temperature_probe.py</strong></summary>
+
+The project includes a modified Klipper `temperature_probe.py`.
+
+The modified copy is required for Wizard-specific Eddy Tap behavior and calibration handling.
+
+The installer tracks whether the file is Wizard-managed before replacing or restoring it.
+
+</details>
+
+<details>
+<summary>↳ <strong>gcode_shell_command.py</strong></summary>
+
+The project may install `gcode_shell_command.py` when required by the Wizard.
+
+Compatible existing copies are preserved when possible.
+
+Installer ownership tracking is used so unrelated user files are not removed during uninstall.
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>Backup & Recovery Behavior</strong></summary>
+
+Installer backups are stored under:
+
+```text
+~/printer_data/config/eddy_wizard_backups/
+```
+
+Each installer run uses a timestamped backup directory.
+
+Backups are created before configuration files are modified.
+
+This allows manual restoration if a migration or configuration change needs to be rolled back.
+
+</details>
 
 ---
 
-# Running Individual Calibration Macros
+## 6. Troubleshooting & Safety
 
-The worker macros may also be run independently.
+<details>
+<summary><strong>Installer Problems</strong></summary>
 
-## LDC Preparation
+If installation stops unexpectedly:
 
-```text
-EDDY_LDC_PREP
-```
-
-## LDC Calibration
-
-```text
-EDDY_LDC_CALIBRATE
-```
-
-## Main Eddy Calibration Preparation
-
-```text
-EDDY_CURRENT_PREP
-```
-
-## Main Eddy Z Calibration
-
-```text
-EDDY_CURRENT_CALIBRATE
-```
-
-## Eddy Tap Calibration
-
-```text
-EDDY_TAP_CALIBRATE
-```
-
-## Thermal Drift Calibration
-
-Default target:
-
-```text
-EDDY_TEMP_CALIBRATE
-```
-
-Custom target:
-
-```text
-EDDY_TEMP_CALIBRATE TARGET=70
-```
-
----
-
-# Saving a Tap Z Offset
-
-After first-layer tuning or Z baby stepping, the Tap Z offset can be applied using:
-
-```text
-SAVE_EDDY_TAP_OFFSET
-```
-
-This uses Klipper's:
-
-```text
-Z_OFFSET_APPLY_PROBE METHOD=tap
-```
-
-Follow the normal Klipper `SAVE_CONFIG` workflow after applying the offset.
-
----
-
-# Clearing Eddy Calibration
-
-The project provides:
-
-```text
-EDDY_CLEAR_CALIBRATION
-```
-
-This is intended for users who want to return Eddy to an uncalibrated state and run the setup process again.
-
-The command displays a confirmation prompt before modifying the configuration.
-
-It clears the saved Eddy calibration values associated with:
-
-```text
-LDC drive current
-Main Eddy calibration
-Tap threshold
-Tap Z offset
-Thermal compensation calibration
-```
-
-It does **not** intentionally remove unrelated printer configuration such as:
-
-```text
-Probe X/Y offsets
-zero_reference_position
-bed_mesh settings
-MCU connection settings
-```
-
-Before changing `printer.cfg`, the helper creates a backup under:
-
-```text
-~/printer_data/config/eddy_wizard_backups/<timestamp>/
-```
-
-The command will also refuse to proceed when certain unsafe states are detected, including:
-
-- An active or paused print
-- Pending unrelated `SAVE_CONFIG` changes
-- An active manual-probe operation
-- No native Eddy probe
-- Multiple Eddy probes
-
-After clearing the calibration, Eddy must be calibrated again before normal use.
-
-Run:
-
-```text
-EDDY_SETUP
-```
-
-to begin the setup process again.
-
----
-
-# Modified Klipper `temperature_probe.py`
-
-This project includes:
-
-```text
-Klipper-Eddy-Tap-Wizard/klipper/klippy/extras/temperature_probe.py
-```
-
-which corresponds to:
-
-```text
-~/klipper/klippy/extras/temperature_probe.py
-```
-
-on a typical Klipper installation.
-
-The included version contains behavior required by this project for repeated Eddy Tap thermal sampling.
-
-Notable changes include:
-
-- Starting subsequent thermal Tap attempts from a known safe height above the previous Tap contact position
-- Using the actual Tap result / bed reference instead of the post-Tap toolhead pullback position
-
-The implementation currently uses:
-
-```python
-TAP_START_Z = 5.
-```
-
-The installer checks the installed file before replacing it.
-
-If another installed `temperature_probe.py` already contains the required behavior but differs from the repository copy, the installer does not blindly overwrite it.
-
-When the installer owns the installed copy, updates can be applied safely using its stored ownership hash.
-
----
-
-# `gcode_shell_command.py`
-
-`EDDY_CLEAR_CALIBRATION` requires the Klipper:
-
-```text
-RUN_SHELL_COMMAND
-```
-
-extension.
-
-The project includes:
-
-```text
-Klipper-Eddy-Tap-Wizard/klipper/klippy/extras/gcode_shell_command.py
-```
-
-The installer checks whether an existing copy is already installed.
-
-If the file is missing, the required copy is installed.
-
-If another project or the user already manages a different copy, the installer preserves that copy rather than blindly replacing it.
-
----
-
-# Important Safety Notes
-
-## Back Up Your Printer
-
-The installer creates targeted backups before managed changes, but maintaining your own known-good printer backup is still recommended.
-
-Example:
+1. Read the final `[FAIL]` or `[WARN]` message.
+2. Run detect-only mode:
 
 ```bash
-cp -r ~/printer_data/config ~/printer_data/config_backup
+./install.sh --detect-only
 ```
 
-## Remain Near the Printer During Initial Setup
+3. Review the reported active native Eddy probes, Eddy-NG probes, and inactive Eddy candidates.
+4. Check the latest timestamped backup directory before manually editing configuration.
 
-Initial Eddy calibration can occur before normal Eddy-based Z homing is available.
+</details>
 
-The Wizard uses temporary positioning during the bootstrap process.
+<details>
+<summary><strong>Calibration Problems</strong></summary>
 
-Remain near the printer during first-time setup and calibration.
+If a calibration stage fails:
 
-## Verify Printer Geometry
+- Confirm the printer is homed when required
+- Confirm the probe can move safely through the requested Z range
+- Confirm the correct Eddy probe is active
+- Confirm the printer is mechanically stable
+- Re-run only the failed Wizard stage when appropriate
 
-The installer asks for printer-specific geometry when creating a fresh configuration.
+</details>
 
-Verify all entered values carefully, particularly:
+<details>
+<summary><strong>Eddy Tap Problems</strong></summary>
 
-- Probe offsets
-- Zero reference position
-- Mesh boundaries
-- Safe motion area
+Tap calibration is sensitive to mechanical and electrical noise.
 
-Do not copy geometry values from another printer unless the hardware and dimensions actually match.
+Potential sources of interference include:
 
-## One Eddy Probe
+- Fans
+- Vibration
+- Loose toolhead hardware
+- Probe mounting movement
+- Electrical noise
+- Incorrect Tap calibration values
 
-The installer and Wizard currently expect exactly one native Eddy probe.
+If Tap behavior is inconsistent, eliminate obvious vibration or airflow sources before recalibrating.
 
-If multiple probes are detected, installation/setup stops instead of guessing which probe to use.
+</details>
 
----
+<details>
+<summary><strong>Temperature Compensation Problems</strong></summary>
 
-# Troubleshooting
+Thermal compensation requires compatible temperature sensing.
 
-## `No [probe_eddy_current <name>] configuration was found`
+If the Eddy hardware does not provide usable temperature data, thermal calibration should not be expected to function correctly.
 
-The Wizard could not locate a native Eddy probe.
+Verify the active `[temperature_probe ...]` and temperature sensor configuration before attempting thermal calibration.
 
-Confirm that a section similar to:
+</details>
 
-```ini
-[probe_eddy_current eddy]
-```
+<details>
+<summary><strong>Backup / Recovery</strong></summary>
 
-is active in the Klipper config tree.
-
----
-
-## Multiple Eddy Probes Detected
-
-The Wizard currently supports one configured native Eddy probe at a time.
-
-Remove or disable the additional Eddy probe configuration before continuing.
-
----
-
-## BTT/Rappetor Configuration Detected
-
-The installer detected a BIGTREETECH/Rappetor-style Eddy configuration that is not currently supported by the automatic installer.
-
-The installer intentionally exits before changing printer or Klipper files.
-
-Automatic conversion is not currently implemented.
-
----
-
-## Eddy-NG Configuration Detected
-
-The Wizard is designed around Klipper's native:
-
-```ini
-[probe_eddy_current <name>]
-```
-
-implementation.
-
-Eddy-NG configurations are not automatically converted.
-
----
-
-## Unknown Command: `EDDY_SETUP`
-
-Confirm that:
+Before manual recovery, inspect:
 
 ```text
-eddy_setup_wizard.cfg
+~/printer_data/config/eddy_wizard_backups/
 ```
 
-is active in the Klipper configuration tree.
+The installer creates backups before modifying user configuration.
 
-A normal installer run verifies this before completion.
+Restore only the files required to return the printer to the previous known-good state.
 
----
-
-## Unknown Command: `EDDY_TAP_CALIBRATE`
-
-Confirm that:
-
-```ini
-[include eddy_macros.cfg]
-```
-
-is active and that the installed `eddy_macros.cfg` is current.
+</details>
 
 ---
 
-## Duplicate `[save_variables]`
+## 7. Project Information
 
-Klipper allows only one `[save_variables]` section.
+<details>
+<summary><strong>Compatibility</strong></summary>
 
-If your configuration already contains one, do not create another.
+This project targets current mainline Klipper native Eddy support.
 
-The installer searches the active configuration tree before adding one.
+The Wizard is intended for native Klipper `[probe_eddy_current ...]` configurations rather than alternate Eddy implementations.
 
----
+</details>
 
-## Thermal Calibration Is Skipped
+<details>
+<summary><strong>Credits</strong></summary>
 
-Thermal drift calibration only runs when a matching temperature probe exists.
+Klipper Eddy Tap Wizard builds on native Klipper Eddy current probe support and the work of the Klipper community.
 
-Example:
+Additional credits and references can be listed here.
 
-```ini
-[probe_eddy_current eddy]
-```
+</details>
 
-must match:
+<details>
+<summary><strong>Contributing</strong></summary>
 
-```ini
-[temperature_probe eddy]
-```
+Issues, testing feedback, documentation improvements, and pull requests are welcome.
 
----
+When reporting installer problems, include:
 
-## Thermal Calibration Does Not Reach Target
+- Installer output
+- Relevant Eddy configuration
+- Klipper version
+- Connection type
+- Whether the installation is fresh, migrated, or existing native Eddy
 
-The probe may reach thermal equilibrium before the requested target.
+</details>
 
-Use:
+<details>
+<summary><strong>License</strong></summary>
 
-```text
-Force Next Sample
-```
+Add the project's license information here.
 
-or:
-
-```text
-Finish at Current Temperature
-```
-
-when appropriate.
-
-Klipper still requires enough samples to construct a valid thermal drift model.
-
----
-
-## Tap Calibration Fails Intermittently
-
-Mechanical vibration and electrical noise can affect Eddy Tap detection.
-
-Check:
-
-- Probe mounting
-- Toolhead rigidity
-- Wiring
-- Cable routing
-- Fans or other devices introducing vibration
-- Tap starting height
-- Existing Tap calibration values
-
-Do not arbitrarily increase the Tap threshold without understanding the effect on sensitivity.
-
----
-
-# Updating Klipper
-
-Eddy support continues to evolve in Klipper.
-
-Klipper updates may change:
-
-- Eddy G-code commands
-- Status objects
-- Calibration storage
-- Thermal compensation
-- Tap behavior
-- `temperature_probe.py`
-
-Before updating Klipper on a working printer:
-
-1. Back up the current configuration.
-2. Keep a copy of any modified Python files.
-3. Review relevant upstream Eddy changes.
-4. Run the Eddy Tap Wizard installer again after the Klipper update.
-5. Confirm the installer still detects the required thermal Tap behavior.
-6. Retest calibration before relying on the printer unattended.
-
----
-
-# Contributing
-
-Pull requests are welcome for fixes and improvements.
-
-A typical workflow:
-
-```bash
-git switch -c my-eddy-change
-
-# Make and test changes
-
-git add .
-git commit -m "Describe the Eddy wizard change"
-git push -u origin my-eddy-change
-```
-
-Then open a Pull Request against the project repository.
-
----
-
-# Credits
-
-This project builds on Klipper's Eddy current probe, Tap probing, manual-probe, and temperature drift calibration systems.
-
-Klipper:
-
-https://github.com/Klipper3d/klipper
-
-Klipper Eddy documentation:
-
-https://www.klipper3d.org/Eddy_Probe.html
-
----
-
-# License
-
-This repository distributes modified Klipper source components.
-
-Applicable upstream copyright and GPLv3 licensing information must remain preserved in modified Klipper files.
-
----
-
-# Disclaimer
-
-This project modifies printer calibration and Z probing behavior.
-
-Use it at your own risk.
-
-Review your printer configuration before running calibration, remain near the printer during initial setup, and maintain backups of a known-good Klipper configuration.
+</details>
