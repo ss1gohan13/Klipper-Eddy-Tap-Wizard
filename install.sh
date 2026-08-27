@@ -960,6 +960,129 @@ validate_zero_reference_position() {
 }
 
 # ---------------------------------------------------------------------------
+# Eddy Tap negative Z travel validation
+# ---------------------------------------------------------------------------
+
+Z_TRAVEL_FILE=""
+Z_POSITION_MIN=""
+
+locate_active_stepper_z() {
+    local record
+
+    Z_TRAVEL_FILE=""
+    Z_POSITION_MIN=""
+
+    record="$(section_record_for_active_name "stepper_z" || true)"
+    [[ -n "${record}" ]] || return 1
+
+    IFS='|' read -r Z_TRAVEL_FILE _ _ <<< "${record}"
+    return 0
+}
+
+validate_tap_negative_z_travel() {
+    if ! locate_active_stepper_z; then
+        warn "No active [stepper_z] section was found."
+        warn "Unable to automatically verify Eddy Tap negative Z travel."
+        return 0
+    fi
+
+    Z_POSITION_MIN="$(
+        get_section_option "${Z_TRAVEL_FILE}" "stepper_z" "position_min" || true
+    )"
+
+    # Missing position_min: add the Eddy Tap-safe default.
+    if [[ -z "${Z_POSITION_MIN}" ]]; then
+        info "[stepper_z] does not define position_min."
+        info "Adding position_min: -1 for Eddy Tap."
+
+        backup_path \
+            "${Z_TRAVEL_FILE}" \
+            "$(basename -- "${Z_TRAVEL_FILE}").before_tap_position_min"
+
+        insert_option_into_section \
+            "${Z_TRAVEL_FILE}" \
+            "stepper_z" \
+            "position_min" \
+            "-1"
+
+        Z_POSITION_MIN="-1"
+
+        ok "Added [stepper_z] position_min: -1"
+        rebuild_active_tree
+        return 0
+    fi
+
+    # Existing position_min must be numeric.
+    if ! [[ "${Z_POSITION_MIN}" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+        die "Invalid [stepper_z] position_min value: ${Z_POSITION_MIN}"
+    fi
+
+    # Anything greater than -1 does not provide the minimum travel
+    # we want for Eddy Tap. Force it to -1.
+    if awk -v z="${Z_POSITION_MIN}" 'BEGIN { exit !(z > -1) }'; then
+        info "Active [stepper_z] position_min is ${Z_POSITION_MIN}."
+        info "Eddy Tap requires at least 1mm of negative Z travel."
+
+        backup_path \
+            "${Z_TRAVEL_FILE}" \
+            "$(basename -- "${Z_TRAVEL_FILE}").before_tap_position_min"
+
+        python3 - "${Z_TRAVEL_FILE}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+
+header_rx = re.compile(r'^\s*\[([^\]]+)\]\s*(?:#.*)?$')
+option_rx = re.compile(
+    r'^(\s*)position_min\s*:\s*([^#\r\n]*)(\s*(?:#.*)?)$',
+    re.IGNORECASE,
+)
+
+with open(path, encoding='utf-8') as f:
+    lines = f.readlines()
+
+inside = False
+changed = False
+
+for i, line in enumerate(lines):
+    stripped = line.rstrip('\n')
+    header = header_rx.match(stripped)
+
+    if header:
+        inside = header.group(1).strip().lower() == "stepper_z"
+        continue
+
+    if inside:
+        match = option_rx.match(stripped)
+        if match:
+            newline = '\n' if line.endswith('\n') else ''
+            lines[i] = (
+                f"{match.group(1)}position_min: -1"
+                f"{match.group(3)}{newline}"
+            )
+            changed = True
+            break
+
+if not changed:
+    raise SystemExit(2)
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.writelines(lines)
+PY
+
+        Z_POSITION_MIN="-1"
+
+        ok "Updated [stepper_z] position_min to -1."
+        rebuild_active_tree
+        return 0
+    fi
+
+    # -1 or anything more negative is already acceptable.
+    ok "Eddy Tap Z travel already configured: position_min=${Z_POSITION_MIN}"
+}
+
+# ---------------------------------------------------------------------------
 # Template rendering / fresh canonical Eddy config
 # ---------------------------------------------------------------------------
 
@@ -1945,6 +2068,7 @@ offer_section_consolidation
 
 ensure_save_variables
 install_python_dependencies
+validate_tap_negative_z_travel
 verify_installation
 
 if (( ${#BTT_STYLE_FILES[@]} > 0 )); then
