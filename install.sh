@@ -94,6 +94,7 @@ declare -a MISSING_INCLUDE_RECORDS=()
 declare -a ACTIVE_NATIVE_PROBE_RECORDS=()
 declare -a ACTIVE_EDDY_NG_RECORDS=()
 declare -a INACTIVE_EDDY_FILES=()
+declare -a HISTORICAL_CFG_FILES=()
 declare -a BTT_STYLE_FILES=()
 
 EDDY_STATE="none"
@@ -440,6 +441,7 @@ path_is_active() {
 
 scan_all_cfg_files() {
     ALL_CFG_FILES=()
+
     while IFS= read -r file; do
         ALL_CFG_FILES+=("$(resolve_path "${file}")")
     done < <(
@@ -450,8 +452,40 @@ scan_all_cfg_files() {
     )
 }
 
+is_historical_backup_cfg() {
+    local file="$1"
+    local base
+    local rel
+
+    base="$(basename -- "${file}")"
+    rel="${file#${CONFIG_DIR}/}"
+
+    # Klipper / Mainsail / Fluidd timestamped printer.cfg backups
+    if [[ "${base}" =~ ^printer-[0-9]{8}_[0-9]{6}\.cfg$ ]]; then
+        return 0
+    fi
+
+    # Common backup suffixes
+    if [[ "${base}" =~ \.(bak|backup|old|orig)(\.cfg)?$ ]]; then
+        return 0
+    fi
+
+    # Clearly archival directory components
+	if [[ "/${rel}/" =~ /[^/]*(backup|backups|bkp|archive|archives)[^/]*/ ]]; then
+		return 0
+	fi
+
+    # Wizard's own backups
+    if [[ "${file}" == "${BACKUP_ROOT}/"* ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
 file_has_eddy_content() {
     local file="$1"
+
     grep -Eqi \
         '\[(probe_eddy_current|probe_eddy_ng|temperature_probe[[:space:]]+[^]]*eddy|mcu[[:space:]]+eddy|temperature_sensor[[:space:]]+[^]]*eddy)[^]]*\]|eddy[-_ ]ng|PROBE_EDDY|LDC_CALIBRATE|Eddy Tap Wizard' \
         "${file}" 2>/dev/null
@@ -477,11 +511,19 @@ scan_eddy_families() {
     ACTIVE_NATIVE_PROBE_RECORDS=()
     ACTIVE_EDDY_NG_RECORDS=()
     INACTIVE_EDDY_FILES=()
+    HISTORICAL_CFG_FILES=()
     BTT_STYLE_FILES=()
 
     for file in "${ALL_CFG_FILES[@]}"; do
         active=0
         path_is_active "${file}" && active=1
+
+        # Ignore historical/backup configs only when they are inactive.
+        # Active files are always inspected.
+        if [[ "${active}" -eq 0 ]] && is_historical_backup_cfg "${file}"; then
+            HISTORICAL_CFG_FILES+=("${file}")
+            continue
+        fi
 
         if is_btt_style_file "${file}"; then
             BTT_STYLE_FILES+=("${file}")
@@ -529,11 +571,13 @@ report_discovery() {
     printf '\n%sConfiguration discovery%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
     printf 'Active config files:          %d\n' "${#ACTIVE_CFG_FILES[@]}"
-    printf 'All config files scanned:     %d\n' "${#ALL_CFG_FILES[@]}"
-    printf 'Active native Eddy probes:    %d\n' "${#ACTIVE_NATIVE_PROBE_RECORDS[@]}"
-    printf 'Active Eddy-NG probes:        %d\n' "${#ACTIVE_EDDY_NG_RECORDS[@]}"
-    printf 'Inactive Eddy-related files:  %d\n' "${#INACTIVE_EDDY_FILES[@]}"
-    printf 'Classification:               %s\n' "${EDDY_STATE}"
+	printf 'Active config files:          %d\n' "${#ACTIVE_CFG_FILES[@]}"
+	printf 'All config files discovered:  %d\n' "${#ALL_CFG_FILES[@]}"
+	printf 'Historical backups ignored:   %d\n' "${#HISTORICAL_CFG_FILES[@]}"
+	printf 'Active native Eddy probes:    %d\n' "${#ACTIVE_NATIVE_PROBE_RECORDS[@]}"
+	printf 'Active Eddy-NG probes:        %d\n' "${#ACTIVE_EDDY_NG_RECORDS[@]}"
+	printf 'Inactive Eddy candidates:     %d\n' "${#INACTIVE_EDDY_FILES[@]}"
+	printf 'Classification:               %s\n' "${EDDY_STATE}"
 
     if (( ${#MISSING_INCLUDE_RECORDS[@]} > 0 )); then
         warn "Missing include targets were found in the active config tree:"
@@ -545,7 +589,7 @@ report_discovery() {
     fi
 
     if (( ${#INACTIVE_EDDY_FILES[@]} > 0 )); then
-        info "Inactive Eddy-related files were found. They will not be migrated automatically:"
+        info "Inactive Eddy migration candidates were found:"
         local file
         for file in "${INACTIVE_EDDY_FILES[@]}"; do
             printf '  %s\n' "${file}"
