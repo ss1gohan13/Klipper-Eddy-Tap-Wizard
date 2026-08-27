@@ -286,7 +286,7 @@ if [[ "${AFTER_PULL}" -ne 1 \
     printf '  3) Uninstall\n'
     printf '  4) Detect only\n'
 	printf '  5) Exit\n'
-    ask_choice "Action" "1" "1" "4"
+    ask_choice "Action" "1" "1" "5"
     case "${ANSWER}" in
         1) ;;
         2) DO_UPDATE=1 ;;
