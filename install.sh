@@ -285,12 +285,18 @@ if [[ "${AFTER_PULL}" -ne 1 \
     printf '  2) Update\n'
     printf '  3) Uninstall\n'
     printf '  4) Detect only\n'
+	printf '  5) Exit\n'
     ask_choice "Action" "1" "1" "4"
     case "${ANSWER}" in
         1) ;;
         2) DO_UPDATE=1 ;;
         3) UNINSTALL=1 ;;
         4) DETECT_ONLY=1 ;;
+		5)
+        	clear_screen
+        	printf '%s\n' "Exiting Klipper Eddy Tap Wizard."
+        	exit 0
+        	;;
     esac
 fi
 
