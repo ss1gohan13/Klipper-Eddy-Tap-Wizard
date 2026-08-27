@@ -426,13 +426,9 @@ rebuild_active_tree() {
 
 path_is_active() {
     local wanted
-    local file
 
     wanted="$(resolve_path "$1")"
-    for file in "${ACTIVE_CFG_FILES[@]}"; do
-        [[ "$(resolve_path "${file}")" == "${wanted}" ]] && return 0
-    done
-    return 1
+    [[ -n "${ACTIVE_CFG_SEEN[${wanted}]:-}" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -440,16 +436,51 @@ path_is_active() {
 # ---------------------------------------------------------------------------
 
 scan_all_cfg_files() {
+    local file
+    local resolved
+    declare -A seen=()
+
     ALL_CFG_FILES=()
+    HISTORICAL_CFG_FILES=()
+
+    printf '\n'
+    start_scan_indicator "Scanning Klipper configuration files"
+
+    for file in "${ACTIVE_CFG_FILES[@]}"; do
+        resolved="$(resolve_path "${file}")"
+
+        if [[ -z "${seen[${resolved}]:-}" ]]; then
+            ALL_CFG_FILES+=("${resolved}")
+            seen["${resolved}"]=1
+        fi
+    done
 
     while IFS= read -r file; do
-        ALL_CFG_FILES+=("$(resolve_path "${file}")")
+        resolved="$(resolve_path "${file}")"
+
+        if [[ -n "${seen[${resolved}]:-}" ]]; then
+            continue
+        fi
+
+        if is_historical_backup_cfg "${resolved}"; then
+            HISTORICAL_CFG_FILES+=("${resolved}")
+            continue
+        fi
+
+        ALL_CFG_FILES+=("${resolved}")
+        seen["${resolved}"]=1
     done < <(
-        find "${CONFIG_DIR}" -type f -name '*.cfg' \
+        find "${CONFIG_DIR}" \
+            -type f \
+            -name '*.cfg' \
             ! -path "${BACKUP_ROOT}/*" \
             ! -path '*/.git/*' \
-            -print 2>/dev/null | sort
+            -print 2>/dev/null |
+        sort
     )
+
+    stop_scan_indicator
+    ok "Configuration scan complete."
 }
 
 is_historical_backup_cfg() {
@@ -501,18 +532,45 @@ is_btt_style_file() {
         && grep -Eq 'PROBE_EDDY_CURRENT_CALIBRATE_AUTO|BTT_BED_MESH_CALIBRATE|variable_runtime_offset|SET_GCODE_OFFSET_ORIG' "${file}" 2>/dev/null
 }
 
+start_scan_indicator() {
+    local message="$1"
+
+    (
+        while true; do
+            printf '\r[INFO] %s.  ' "${message}"
+            sleep 0.4
+            printf '\r[INFO] %s.. ' "${message}"
+            sleep 0.4
+            printf '\r[INFO] %s...' "${message}"
+            sleep 0.4
+        done
+    ) &
+
+    SCAN_INDICATOR_PID=$!
+}
+
+stop_scan_indicator() {
+    if [[ -n "${SCAN_INDICATOR_PID:-}" ]]; then
+        kill "${SCAN_INDICATOR_PID}" 2>/dev/null || true
+        wait "${SCAN_INDICATOR_PID}" 2>/dev/null || true
+        unset SCAN_INDICATOR_PID
+    fi
+
+    printf '\r%-70s\r' ' '
+}
+
 scan_eddy_families() {
+	start_scan_indicator "Analyzing ${#ALL_CFG_FILES[@]} configuration files for Eddy settings"
     local file
     local line
     local section
     local name
     local active
 
-    ACTIVE_NATIVE_PROBE_RECORDS=()
-    ACTIVE_EDDY_NG_RECORDS=()
-    INACTIVE_EDDY_FILES=()
-    HISTORICAL_CFG_FILES=()
-    BTT_STYLE_FILES=()
+	ACTIVE_NATIVE_PROBE_RECORDS=()
+	ACTIVE_EDDY_NG_RECORDS=()
+	INACTIVE_EDDY_FILES=()
+	BTT_STYLE_FILES=()
 
     for file in "${ALL_CFG_FILES[@]}"; do
         active=0
@@ -520,10 +578,6 @@ scan_eddy_families() {
 
         # Ignore historical/backup configs only when they are inactive.
         # Active files are always inspected.
-        if [[ "${active}" -eq 0 ]] && is_historical_backup_cfg "${file}"; then
-            HISTORICAL_CFG_FILES+=("${file}")
-            continue
-        fi
 
         if is_btt_style_file "${file}"; then
             BTT_STYLE_FILES+=("${file}")
@@ -565,13 +619,16 @@ scan_eddy_families() {
     else
         EDDY_STATE="none"
     fi
+	
+	stop_scan_indicator
+	ok "Eddy configuration analysis complete."
 }
 
 report_discovery() {
     printf '\n%sConfiguration discovery%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
     printf 'Active config files:          %d\n' "${#ACTIVE_CFG_FILES[@]}"
-	printf 'All config files discovered:  %d\n' "${#ALL_CFG_FILES[@]}"
+	printf 'Config files analyzed:        %d\n' "${#ALL_CFG_FILES[@]}"
 	printf 'Historical backups ignored:   %d\n' "${#HISTORICAL_CFG_FILES[@]}"
 	printf 'Active native Eddy probes:    %d\n' "${#ACTIVE_NATIVE_PROBE_RECORDS[@]}"
 	printf 'Active Eddy-NG probes:        %d\n' "${#ACTIVE_EDDY_NG_RECORDS[@]}"
