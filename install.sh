@@ -78,7 +78,8 @@ BACKUP_CREATED=0
 AUTO_YES=0
 DO_UPDATE=0
 DETECT_ONLY=0
-UNINSTALL=0
+UNINSTALL_WIZARD=0
+FULL_UNINSTALL=0
 PREPARE_KLIPPER_UPDATE=0
 AFTER_PULL="${EDDY_WIZARD_AFTER_PULL:-0}"
 
@@ -240,6 +241,8 @@ Usage:
   ./install.sh --update
   ./install.sh --detect-only
   ./install.sh --uninstall
+  ./install.sh --uninstall-wizard
+  ./install.sh --uninstall-all
   ./install.sh --prepare-klipper-update
   ./install.sh --yes
 
@@ -271,46 +274,72 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --update) DO_UPDATE=1; shift ;;
         --detect-only) DETECT_ONLY=1; shift ;;
-        --uninstall) UNINSTALL=1; shift ;;
-        --prepare-klipper-update) PREPARE_KLIPPER_UPDATE=1; shift ;;
+
+        --uninstall|--uninstall-wizard)
+            UNINSTALL_WIZARD=1
+            shift
+            ;;
+
+        --uninstall-all)
+            FULL_UNINSTALL=1
+            shift
+            ;;
+
+        --prepare-klipper-update)
+            PREPARE_KLIPPER_UPDATE=1
+            shift
+            ;;
+
         -y|--yes) AUTO_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1" ;;
     esac
 done
 
-selected_actions=$((DO_UPDATE + DETECT_ONLY + UNINSTALL + PREPARE_KLIPPER_UPDATE))
+selected_actions=$(( \
+        DO_UPDATE
+        + DETECT_ONLY
+        + UNINSTALL_WIZARD
+        + FULL_UNINSTALL
+        + PREPARE_KLIPPER_UPDATE
+    ))
+
 (( selected_actions <= 1 )) \
-    || die "--update, --detect-only, --uninstall, and --prepare-klipper-update are mutually exclusive."
+    || die "--update, --detect-only, --uninstall-wizard, --uninstall-all, and --prepare-klipper-update are mutually exclusive."
 
 if [[ "${AFTER_PULL}" -ne 1 \
    && "${DO_UPDATE}" -eq 0 \
    && "${DETECT_ONLY}" -eq 0 \
-   && "${UNINSTALL}" -eq 0 \
+   && "${UNINSTALL_WIZARD}" -eq 0 \
+   && "${FULL_UNINSTALL}" -eq 0 \
    && "${PREPARE_KLIPPER_UPDATE}" -eq 0 ]]; then
     clear_screen
 
-    printf '\n%sChoose action%s\n' "${BOLD}" "${RESET}"
-    printf '%s\n' "------------------------------------------------------------"
-    printf '  1) Install / Repair\n'
-    printf '  2) Update Eddy Wizard\n'
-    printf '  3) Uninstall\n'
-    printf '  4) Detect only\n'
-    printf '  5) Remove Eddy Patch for Klipper Update\n'
-    printf '  6) Exit\n'
-    ask_choice "Action" "1" "1" "6"
-    case "${ANSWER}" in
-        1) ;;
-        2) DO_UPDATE=1 ;;
-        3) UNINSTALL=1 ;;
-        4) DETECT_ONLY=1 ;;
-        5) PREPARE_KLIPPER_UPDATE=1 ;;
-        6)
-            clear_screen
-            printf '%s\n' "Exiting Klipper Eddy Tap Wizard."
-            exit 0
-            ;;
-    esac
+	printf '\n%sChoose action%s\n' "${BOLD}" "${RESET}"
+	printf '%s\n' "------------------------------------------------------------"
+	printf '  1) Install / Repair\n'
+	printf '  2) Update Eddy Wizard\n'
+	printf '  3) Uninstall Wizard Only\n'
+	printf '  4) Full Eddy Uninstall\n'
+	printf '  5) Detect only\n'
+	printf '  6) Remove Eddy Patch for Klipper Update\n'
+	printf '  7) Exit\n'
+
+	ask_choice "Action" "1" "1" "7"
+
+	case "${ANSWER}" in
+		1) ;;
+		2) DO_UPDATE=1 ;;
+		3) UNINSTALL_WIZARD=1 ;;
+		4) FULL_UNINSTALL=1 ;;
+		5) DETECT_ONLY=1 ;;
+		6) PREPARE_KLIPPER_UPDATE=1 ;;
+		7)
+			clear_screen
+			printf '%s\n' "Exiting Klipper Eddy Tap Wizard."
+			exit 0
+			;;
+	esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -333,7 +362,10 @@ done
 [[ -f "${PRINTER_CFG}" ]] || die "printer.cfg not found: ${PRINTER_CFG}"
 [[ -d "${KLIPPER_DIR}/.git" ]] || die "Klipper Git repository not found: ${KLIPPER_DIR}"
 
-if [[ "${DETECT_ONLY}" -eq 0 && "${UNINSTALL}" -eq 0 && "${PREPARE_KLIPPER_UPDATE}" -eq 0 ]]; then
+if [[ "${DETECT_ONLY}" -eq 0 \
+   && "${UNINSTALL_WIZARD}" -eq 0 \
+   && "${FULL_UNINSTALL}" -eq 0 \
+   && "${PREPARE_KLIPPER_UPDATE}" -eq 0 ]]; then
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
     for required in \
         "${SRC_MACROS}" \
@@ -2305,53 +2337,528 @@ remove_expected_symlink() {
     ok "Removed Wizard symlink: ${path}"
 }
 
-uninstall_wizard() {
-    printf '\n%sUninstall Eddy Tap Wizard%s\n' "${BOLD}" "${RESET}"
-    printf 'The canonical user-owned eddy/eddy.cfg will be preserved.\n'
-    printf 'Native Eddy hardware configuration and saved calibration are preserved.\n\n'
+remove_managed_clear_cfg() {
+    local recorded_hash=""
+    local current_hash=""
 
-    ask_yes_no "Continue?" "n" || exit 0
+    [[ -e "${DST_CLEAR}" || -L "${DST_CLEAR}" ]] || return 0
 
-    # temperature_probe.py is a tracked Klipper source file.  If the Wizard
-    # owns the compatibility patch, return Klipper to Git HEAD before removing
-    # the ownership metadata.
+    if [[ -L "${DST_CLEAR}" ]]; then
+        warn "Symlinked eddy_clear_calibration.cfg is not being removed automatically:"
+        warn "  ${DST_CLEAR}"
+        return 0
+    fi
+
+    if [[ ! -f "${CLEAR_CFG_HASH_FILE}" ]]; then
+        warn "Cannot prove ownership of ${DST_CLEAR}; preserving it."
+        return 0
+    fi
+
+    recorded_hash="$(tr -d '[:space:]' < "${CLEAR_CFG_HASH_FILE}")"
+    current_hash="$(sha256sum "${DST_CLEAR}" | awk '{print $1}')"
+
+    if [[ -n "${recorded_hash}" && "${recorded_hash}" == "${current_hash}" ]]; then
+        backup_path \
+            "${DST_CLEAR}" \
+            "eddy_clear_calibration.cfg.before_uninstall"
+
+        rm -f -- "${DST_CLEAR}"
+        ok "Removed Wizard-managed eddy_clear_calibration.cfg."
+    else
+        warn "eddy_clear_calibration.cfg differs from the Wizard-managed version."
+        warn "Preserving user-modified file: ${DST_CLEAR}"
+    fi
+}
+
+	uninstall_wizard_only() {
+		printf '\n%sUninstall Wizard Only%s\n' "${BOLD}" "${RESET}"
+		printf '%s\n' "------------------------------------------------------------"
+		printf '%s\n' "This removes the Eddy Tap Wizard integration while keeping"
+		printf '%s\n' "your native Eddy configuration active."
+		printf '\n'
+		printf '%s\n' "This will:"
+		printf '%s\n' "  - Restore native Klipper temperature_probe.py when Wizard-owned"
+		printf '%s\n' "  - Remove Wizard macro/setup/clear-calibration integration"
+		printf '%s\n' "  - Keep eddy/eddy.cfg"
+		printf '%s\n' "  - Keep the active [include eddy/eddy.cfg]"
+		printf '%s\n' "  - Keep Eddy hardware configuration and saved calibration"
+		printf '\n'
+
+		ask_yes_no "Uninstall the Eddy Tap Wizard only?" "n" || exit 0
+
+		restore_temperature_probe_for_uninstall
+
+		if [[ -f "${DST_EDDY}" ]]; then
+			backup_path "${DST_EDDY}" "eddy.cfg.before_wizard_uninstall"
+
+			sed -i -E \
+				-e '/^[[:space:]]*\[include[[:space:]]+eddy_setup_wizard\.cfg\][[:space:]]*(#.*)?$/d' \
+				-e '/^[[:space:]]*\[include[[:space:]]+eddy_macros\.cfg\][[:space:]]*(#.*)?$/d' \
+				-e '/^[[:space:]]*\[include[[:space:]]+eddy_clear_calibration\.cfg\][[:space:]]*(#.*)?$/d' \
+				"${DST_EDDY}"
+		fi
+
+		remove_expected_symlink "${DST_MACROS}" "${SRC_MACROS}"
+		remove_expected_symlink "${DST_WIZARD}" "${SRC_WIZARD}"
+
+		remove_managed_clear_cfg
+
+		clear_temperature_probe_patch_state
+
+		rm -f -- \
+			"${GCODE_SHELL_HASH_FILE}" \
+			"${CLEAR_CFG_HASH_FILE}" \
+			2>/dev/null || true
+
+		rebuild_active_tree
+
+		path_is_active "${DST_EDDY}" \
+			|| die "Wizard uninstall removed Eddy from the active config tree unexpectedly."
+
+		restart_klipper
+
+		ok "Wizard integration removed."
+		ok "Native Eddy configuration remains active."
+
+		[[ "${BACKUP_CREATED}" -eq 1 ]] \
+			&& info "Backups: ${BACKUP_DIR}"
+
+		exit 0
+	}
+
+full_uninstall_eddy() {
+    local workdir plan_file restore_bundle new_printer
+    local probe_name="" eddy_mcu=""
+    local section file record
+    local -a restore_sections=()
+    local -a unknown_sections=()
+    local -a unknown_entries=()
+    local -a duplicate_records=()
+
+    printf '\n%sFull Eddy Uninstall%s\n' "${BOLD}" "${RESET}"
+    printf '%s\n' "------------------------------------------------------------"
+    printf '%s\n' "This removes the Eddy Tap Wizard and the canonical Eddy configuration."
+    printf '%s\n' "General printer sections currently stored in eddy/eddy.cfg will be"
+    printf '%s\n' "restored to printer.cfg before the Eddy directory is removed."
+    printf '\n'
+    printf '%s\n' "This will:"
+    printf '%s\n' "  - Back up printer.cfg"
+    printf '%s\n' "  - Back up the complete eddy/ directory"
+    printf '%s\n' "  - Restore portable printer sections from eddy/eddy.cfg"
+    printf '%s\n' "  - Restore native Klipper temperature_probe.py when Wizard-owned"
+    printf '%s\n' "  - Remove Eddy/Wizard include references from printer.cfg"
+    printf '%s\n' "  - Remove the complete eddy/ directory"
+    printf '%s\n' "  - Preserve gcode_shell_command.py"
+    printf '%s\n' "  - NOT restart Klipper automatically"
+    printf '\n'
+    warn "If Eddy is your Z endstop/probe, configure a replacement before restarting Klipper."
+    printf '\n'
+
+    ask_yes_no "Perform a Full Eddy Uninstall?" "n" || exit 0
+
+    [[ -d "${EDDY_DIR}" ]] \
+        || die "Canonical Eddy directory not found: ${EDDY_DIR}"
+    [[ -f "${DST_EDDY}" ]] \
+        || die "Canonical Eddy configuration not found: ${DST_EDDY}"
+
+    # Full uninstall removes the entire canonical directory. Refuse to silently
+    # delete files that are not part of the known Wizard layout.
+    mapfile -t unknown_entries < <(
+        find "${EDDY_DIR}" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null \
+            | awk '
+                $0 != "eddy.cfg" &&
+                $0 != "eddy_macros.cfg" &&
+                $0 != "eddy_setup_wizard.cfg" &&
+                $0 != "eddy_clear_calibration.cfg" { print }
+            '
+    )
+
+    if (( ${#unknown_entries[@]} > 0 )); then
+        error "Full uninstall found files in ${EDDY_DIR} that are not part of the canonical Wizard layout:"
+        for file in "${unknown_entries[@]}"; do
+            printf '  %s/%s\n' "${EDDY_DIR}" "${file}" >&2
+        done
+        die "Review or move these files before retrying Full Eddy Uninstall. Nothing was changed."
+    fi
+
+    workdir="$(mktemp -d)"
+    plan_file="${workdir}/plan"
+    restore_bundle="${workdir}/restore.cfg"
+    new_printer="${workdir}/printer.cfg"
+
+    # Read-only preflight. Classify every active section in eddy.cfg and build
+    # a bundle containing only sections that are safe to restore to printer.cfg.
+    if ! python3 - "${DST_EDDY}" "${plan_file}" "${restore_bundle}" <<'PY'
+import re
+import sys
+
+source, plan_path, restore_path = sys.argv[1:]
+
+with open(source, encoding="utf-8") as f:
+    lines = f.readlines()
+
+header_rx = re.compile(r'^\s*\[([^\]]+)\]\s*(?:#.*)?$', re.IGNORECASE)
+banner_rx = re.compile(r'^\s*#{20,}\s*$')
+option_rx_cache = {}
+
+sections = []
+for index, line in enumerate(lines):
+    match = header_rx.match(line.rstrip("\n"))
+    if match:
+        sections.append({
+            "name": match.group(1).strip(),
+            "start": index,
+            "end": len(lines),
+        })
+
+for i, section in enumerate(sections):
+    if i + 1 < len(sections):
+        section["end"] = sections[i + 1]["start"]
+
+
+def option(section, name):
+    key = name.lower()
+    rx = option_rx_cache.get(key)
+    if rx is None:
+        rx = re.compile(
+            r'^\s*' + re.escape(name) + r'\s*:\s*(.*?)\s*(?:#.*)?$',
+            re.IGNORECASE,
+        )
+        option_rx_cache[key] = rx
+    for line in lines[section["start"] + 1:section["end"]]:
+        match = rx.match(line.rstrip("\n"))
+        if match:
+            return match.group(1).strip()
+    return ""
+
+probe_sections = [
+    section for section in sections
+    if section["name"].lower().startswith("probe_eddy_current ")
+]
+
+if len(probe_sections) != 1:
+    print(
+        "Full uninstall requires exactly one active [probe_eddy_current ...] "
+        f"section in {source}; found {len(probe_sections)}.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+probe_section = probe_sections[0]
+probe_name = probe_section["name"].split(None, 1)[1].strip()
+eddy_mcu = option(probe_section, "i2c_mcu")
+
+if not eddy_mcu:
+    print(
+        f"Unable to determine i2c_mcu from [{probe_section['name']}].",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+restore_names = {
+    "bed_mesh",
+    "bed_screws",
+    "screws_tilt_adjust",
+    "safe_z_home",
+    "homing_override",
+    "z_tilt",
+    "quad_gantry_level",
+    "save_variables",
+}
+
+wizard_includes = {
+    "eddy_setup_wizard.cfg",
+    "eddy_macros.cfg",
+    "eddy_clear_calibration.cfg",
+}
+
+probe_key = f"probe_eddy_current {probe_name}".lower()
+temp_probe_key = f"temperature_probe {probe_name}".lower()
+mcu_key = f"mcu {eddy_mcu}".lower()
+
+plan = []
+restore_sections = []
+
+for section in sections:
+    name = section["name"]
+    lower = name.lower()
+    classification = None
+
+    if lower in restore_names:
+        classification = "RESTORE"
+        restore_sections.append(section)
+
+    elif lower.startswith("include "):
+        include_spec = name.split(None, 1)[1].strip()
+        if include_spec in wizard_includes:
+            classification = "EDDY"
+        else:
+            classification = "UNKNOWN"
+
+    elif lower == probe_key:
+        classification = "EDDY"
+
+    elif lower == temp_probe_key:
+        classification = "EDDY"
+
+    elif lower == mcu_key:
+        classification = "EDDY"
+
+    elif lower.startswith("temperature_sensor "):
+        sensor_mcu = option(section, "sensor_mcu")
+        if sensor_mcu.lower() == eddy_mcu.lower():
+            classification = "EDDY"
+        else:
+            classification = "UNKNOWN"
+
+    else:
+        classification = "UNKNOWN"
+
+    plan.append((classification, name))
+
+with open(plan_path, "w", encoding="utf-8") as f:
+    f.write(f"PROBE|{probe_name}\n")
+    f.write(f"MCU|{eddy_mcu}\n")
+    for classification, name in plan:
+        f.write(f"{classification}|{name}\n")
+
+with open(restore_path, "w", encoding="utf-8") as out:
+    for section in restore_sections:
+        end = section["end"]
+
+        # Canonical eddy.cfg uses large comment banners between optional
+        # template blocks. Do not drag the following commented example into
+        # the section being restored.
+        for index in range(section["start"] + 1, end):
+            if banner_rx.match(lines[index].rstrip("\n")):
+                end = index
+                break
+
+        chunk = lines[section["start"]:end]
+        while chunk and not chunk[-1].strip():
+            chunk.pop()
+
+        if chunk:
+            out.writelines(chunk)
+            out.write("\n\n")
+PY
+    then
+        rm -rf -- "${workdir}"
+        die "Unable to build a safe Full Eddy Uninstall plan. Nothing was changed."
+    fi
+
+    probe_name="$(awk -F'|' '$1 == "PROBE" {print $2; exit}' "${plan_file}")"
+    eddy_mcu="$(awk -F'|' '$1 == "MCU" {print $2; exit}' "${plan_file}")"
+    mapfile -t restore_sections < <(awk -F'|' '$1 == "RESTORE" {print $2}' "${plan_file}")
+    mapfile -t unknown_sections < <(awk -F'|' '$1 == "UNKNOWN" {print $2}' "${plan_file}")
+
+    if (( ${#unknown_sections[@]} > 0 )); then
+        error "Full uninstall found active sections/includes in eddy.cfg that are not proven Eddy-specific"
+        error "and are not in the safe printer-section restoration list:"
+        for section in "${unknown_sections[@]}"; do
+            printf '  [%s]\n' "${section}" >&2
+        done
+        rm -rf -- "${workdir}"
+        die "Review these entries before retrying Full Eddy Uninstall. Nothing was changed."
+    fi
+
+    # Read-only duplicate preflight. A restorable section may not already be
+    # active anywhere outside the canonical eddy.cfg.
+    for section in "${restore_sections[@]}"; do
+        duplicate_records=()
+
+        for file in "${ACTIVE_CFG_FILES[@]}"; do
+            [[ "$(resolve_path "${file}")" == "$(resolve_path "${DST_EDDY}")" ]] && continue
+
+            if grep -Eqi "^[[:space:]]*\\[${section}\\][[:space:]]*(#.*)?$" "${file}" 2>/dev/null; then
+                duplicate_records+=("${file}")
+            fi
+        done
+
+        if (( ${#duplicate_records[@]} > 0 )); then
+            error "Cannot restore [${section}] to printer.cfg because an active copy already exists:"
+            for file in "${duplicate_records[@]}"; do
+                printf '  %s [%s]\n' "${file}" "${section}" >&2
+            done
+            rm -rf -- "${workdir}"
+            die "Resolve the duplicate before retrying Full Eddy Uninstall. Nothing was changed."
+        fi
+    done
+
+    # Build the desired printer.cfg completely in temporary storage before
+    # modifying the user's configuration.
+    if ! python3 - "${PRINTER_CFG}" "${EDDY_DIR}" "${restore_bundle}" "${new_printer}" <<'PY'
+import os
+import re
+import sys
+
+printer, eddy_dir, restore_bundle, output = sys.argv[1:]
+
+with open(printer, encoding="utf-8") as f:
+    lines = f.readlines()
+
+marker_start = "# >>> Klipper Eddy Tap Wizard >>>"
+marker_end = "# <<< Klipper Eddy Tap Wizard <<<"
+start_markers = [
+    i for i, line in enumerate(lines)
+    if line.strip() == marker_start
+]
+
+end_markers = [
+    i for i, line in enumerate(lines)
+    if line.strip() == marker_end
+]
+
+if len(start_markers) != len(end_markers):
+    print(
+        "Malformed Klipper Eddy Tap Wizard marker block in printer.cfg: "
+        "opening/closing marker count does not match.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+if len(start_markers) > 1:
+    print(
+        "Multiple Klipper Eddy Tap Wizard marker blocks were found in printer.cfg.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+if start_markers and start_markers[0] > end_markers[0]:
+    print(
+        "Malformed Klipper Eddy Tap Wizard marker block in printer.cfg: "
+        "closing marker appears before opening marker.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+include_rx = re.compile(r'^\s*\[include\s+([^\]]+)\]\s*(?:#.*)?$', re.IGNORECASE)
+
+result = []
+skipping_marker = False
+
+for line in lines:
+    stripped = line.strip()
+
+    if stripped == marker_start:
+        skipping_marker = True
+        continue
+
+    if skipping_marker:
+        if stripped == marker_end:
+            skipping_marker = False
+        continue
+
+    match = include_rx.match(line.rstrip("\n"))
+    if match:
+        spec = match.group(1).strip()
+        normalized = spec[2:] if spec.startswith("./") else spec
+
+        # Remove only includes scoped to the canonical Eddy directory.
+        if normalized.startswith("eddy/"):
+            continue
+
+        if os.path.isabs(spec):
+            prefix = os.path.normpath(eddy_dir) + os.sep
+            if os.path.normpath(spec).startswith(prefix):
+                continue
+
+    result.append(line)
+
+with open(restore_bundle, encoding="utf-8") as f:
+    restored = f.read().rstrip()
+
+if restored:
+    while result and not result[-1].strip():
+        result.pop()
+
+    result.extend([
+        "\n",
+        "\n",
+        "#####################################################################\n",
+        "# Restored by Klipper Eddy Tap Wizard Full Uninstall\n",
+        "#####################################################################\n",
+        "\n",
+        restored + "\n",
+    ])
+
+with open(output, "w", encoding="utf-8") as f:
+    f.writelines(result)
+PY
+    then
+        rm -rf -- "${workdir}"
+        die "Unable to prepare the restored printer.cfg. Nothing was changed."
+    fi
+
+    # Verify the temporary printer.cfg contains every planned restored section
+    # before the first modification is made.
+    for section in "${restore_sections[@]}"; do
+        grep -Eqi "^[[:space:]]*\\[${section}\\][[:space:]]*(#.*)?$" "${new_printer}" \
+            || {
+                rm -rf -- "${workdir}"
+                die "Preflight verification failed for restored [${section}]. Nothing was changed."
+            }
+    done
+
+    printf '\n%sFull uninstall plan%s\n' "${BOLD}" "${RESET}"
+    printf '%s\n' "------------------------------------------------------------"
+    printf 'Eddy probe:                  %s\n' "${probe_name}"
+    printf 'Eddy MCU:                    %s\n' "${eddy_mcu}"
+
+    if (( ${#restore_sections[@]} > 0 )); then
+        printf 'Sections restored to printer.cfg:\n'
+        for section in "${restore_sections[@]}"; do
+            printf '  [%s]\n' "${section}"
+        done
+    else
+        printf 'Sections restored to printer.cfg: none\n'
+    fi
+
+    printf '\n'
+    ask_yes_no "Apply this Full Eddy Uninstall plan?" "n" \
+        || { rm -rf -- "${workdir}"; exit 0; }
+
+    # No configuration changes occur before this point.
+    backup_path "${PRINTER_CFG}" "printer.cfg.before_full_eddy_uninstall"
+    backup_path "${EDDY_DIR}" "eddy.before_full_uninstall"
+
     restore_temperature_probe_for_uninstall
 
-    if grep -Eq '^[[:space:]]*\[include[[:space:]]+eddy/eddy\.cfg\]' "${PRINTER_CFG}"; then
-        backup_path "${PRINTER_CFG}" "printer.cfg.before_eddy_wizard_uninstall"
-        sed -i -E \
-            '/^[[:space:]]*# >>> Klipper Eddy Tap Wizard >>>[[:space:]]*$/,/^[[:space:]]*# <<< Klipper Eddy Tap Wizard <<<[[:space:]]*$/d' \
-            "${PRINTER_CFG}"
-        sed -i -E \
-            '/^[[:space:]]*\[include[[:space:]]+eddy\/eddy\.cfg\][[:space:]]*(#.*)?$/d' \
-            "${PRINTER_CFG}"
-    fi
+    cat "${new_printer}" > "${PRINTER_CFG}" \
+        || die "Failed to write restored printer.cfg. Backups are available at ${BACKUP_DIR}."
 
-    if [[ -f "${DST_EDDY}" ]]; then
-        backup_path "${DST_EDDY}" "eddy.cfg.before_wizard_uninstall"
-        # Keep native/user config; remove only Wizard support includes.
-        sed -i -E \
-            -e '/^[[:space:]]*\[include[[:space:]]+eddy_setup_wizard\.cfg\][[:space:]]*(#.*)?$/d' \
-            -e '/^[[:space:]]*\[include[[:space:]]+eddy_macros\.cfg\][[:space:]]*(#.*)?$/d' \
-            -e '/^[[:space:]]*\[include[[:space:]]+eddy_clear_calibration\.cfg\][[:space:]]*(#.*)?$/d' \
-            "${DST_EDDY}"
-    fi
+    rm -rf -- "${EDDY_DIR}" \
+        || die "Failed to remove ${EDDY_DIR}. Backups are available at ${BACKUP_DIR}."
 
-    remove_expected_symlink "${DST_MACROS}" "${SRC_MACROS}"
-    remove_expected_symlink "${DST_WIZARD}" "${SRC_WIZARD}"
-
-    info "Preserving ${DST_EDDY}"
-    info "Preserving gcode_shell_command.py by default."
+    # gcode_shell_command.py is intentionally preserved because another user
+    # configuration may depend on it. Full uninstall only removes project state.
     clear_temperature_probe_patch_state
-    rm -f -- "${GCODE_SHELL_HASH_FILE}" "${CLEAR_CFG_HASH_FILE}" 2>/dev/null || true
+    rm -rf -- "${STATE_DIR}" 2>/dev/null || true
 
     rebuild_active_tree
-    restart_klipper
 
-    ok "Wizard integration removed. Native/user Eddy configuration preserved."
-    [[ "${BACKUP_CREATED}" -eq 1 ]] && info "Backups: ${BACKUP_DIR}"
+    for section in "${restore_sections[@]}"; do
+        record="$(section_record_for_active_name "${section}" || true)"
+        [[ -n "${record}" ]] \
+            || die "Post-uninstall verification could not find restored [${section}]. Backups are available at ${BACKUP_DIR}."
+    done
+
+    [[ ! -e "${EDDY_DIR}" && ! -L "${EDDY_DIR}" ]] \
+        || die "Post-uninstall verification found ${EDDY_DIR} still present."
+
+    rm -rf -- "${workdir}"
+
+    printf '\n%sFull Eddy Uninstall complete.%s\n' "${GREEN}${BOLD}" "${RESET}"
+    printf 'Backups:\n  %s\n' "${BACKUP_DIR}"
+    printf '\n'
+    printf '%s\n' "Klipper was NOT restarted automatically."
+    printf '%s\n' "gcode_shell_command.py was preserved."
+    printf '\n'
+    warn "If Eddy was your Z endstop/probe, configure a replacement probe or physical Z endstop before restarting Klipper."
+    printf '\n'
+
     exit 0
 }
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -2367,8 +2874,12 @@ scan_all_cfg_files
 scan_eddy_families
 report_discovery
 
-if [[ "${UNINSTALL}" -eq 1 ]]; then
-    uninstall_wizard
+if [[ "${UNINSTALL_WIZARD}" -eq 1 ]]; then
+    uninstall_wizard_only
+fi
+
+if [[ "${FULL_UNINSTALL}" -eq 1 ]]; then
+    full_uninstall_eddy
 fi
 
 if [[ "${DETECT_ONLY}" -eq 1 ]]; then
