@@ -3,7 +3,7 @@
 #
 # Requires the gcode_shell_command Klipper extension.
 #
-# Current Ender3Pro test path:
+# Current test path:
 #   __EDDY_CLEAR_SCRIPT__
 #
 # This reset intentionally clears only Eddy calibration values written
@@ -63,6 +63,16 @@ gcode:
         )}
     {% endif %}
 
+    # Do not clear calibration while Eddy thermal calibration is active.
+    {% set temp_section = "temperature_probe " ~ ns.probe %}
+
+    {% if temp_section in printer.configfile.settings
+          and printer[temp_section].in_calibration %}
+        {action_raise_error(
+            "Eddy thermal calibration is currently active. Finish or abort thermal calibration before clearing calibration data."
+        )}
+    {% endif %}
+
     RESPOND TYPE=command MSG="action:prompt_begin Clear Eddy Calibration"
     RESPOND TYPE=command MSG="action:prompt_text This will remove the saved calibration results for Eddy probe '{ns.probe}'."
     RESPOND TYPE=command MSG="action:prompt_text It clears LDC drive current, main Eddy calibration, Tap threshold/offset, and thermal compensation data."
@@ -87,6 +97,16 @@ gcode:
     {% if ns.probe == "" or ns.count != 1 %}
         {action_raise_error(
             "Unable to uniquely identify the Eddy probe."
+        )}
+    {% endif %}
+
+    # Recheck thermal calibration state at confirmation time.
+    {% set temp_section = "temperature_probe " ~ ns.probe %}
+
+    {% if temp_section in printer.configfile.settings
+          and printer[temp_section].in_calibration %}
+        {action_raise_error(
+            "Eddy thermal calibration became active. Finish or abort thermal calibration before clearing calibration data."
         )}
     {% endif %}
 
