@@ -1,18 +1,14 @@
 :warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning:
 
-> [!IMPORTANT]
+> [!CAUTION]
+>
+> **Test Branch Notice**
+> --- 
 > This project is intended to be used with the latest stable release of **mainline Klipper**.
 >
 > Before installing or running the Eddy Tap Wizard, update Klipper to the latest available release.
 >
 > Older Klipper versions may be missing Eddy Tap functionality or other required changes used by this project.
-
-:warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning:
-
-# Klipper Eddy Tap Wizard
-
-> [!CAUTION]
-> **Test Branch Notice**
 >
 > The `test` branch contains an installer and is under active testing.
 > The installer is intended to handle the supported layouts documented below, but not every real-world Klipper/Eddy configuration has been validated yet.
@@ -21,7 +17,12 @@
 >
 > Before testing installer changes, keep a known-good backup of your printer configuration.
 
+
+:warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning::warning:
+
 ---
+
+# Klipper Eddy Tap Wizard
 
 ## 1. Overview
 
