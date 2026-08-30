@@ -9,6 +9,7 @@
 #   - one canonical eddy.cfg template
 #   - active-tree discovery plus broad recursive config-directory discovery
 #   - content-based native Eddy / Eddy-NG / BTT-style classification
+#   - fresh USB, CAN, and Eddy Coil (existing-MCU I2C) configuration support
 #   - mandatory [bed_mesh] zero_reference_position validation
 #   - optional migration of compatible printer sections into eddy/eddy.cfg
 #   - migrated sections replace their commented examples in eddy/eddy.cfg
@@ -261,8 +262,8 @@ Options:
   -y, --yes                 Automatically accept normal yes/no prompts.
   -h, --help                Show this help.
 
-Fresh configuration generation remains interactive because connection,
-probe-offset, and geometry information cannot be safely guessed.
+Fresh configuration generation remains interactive because hardware connection,
+I2C identity, probe-offset, and geometry information cannot be safely guessed.
 EOF
 }
 
@@ -745,6 +746,83 @@ PY
     return 1
 }
 
+
+collect_active_mcu_names() {
+    # Print unique active Klipper MCU object names.  The unnamed [mcu] section
+    # is represented by the object name "mcu"; [mcu EBBCan] becomes "EBBCan".
+    python3 - "${ACTIVE_CFG_FILES[@]}" <<'PY'
+import re, sys
+rx = re.compile(r'^\s*\[([^\]]+)\]\s*(?:#.*)?$')
+seen = set()
+for path in sys.argv[1:]:
+    try:
+        fh = open(path, encoding='utf-8')
+    except OSError:
+        continue
+    with fh:
+        for line in fh:
+            m = rx.match(line.rstrip('\n'))
+            if not m:
+                continue
+            section = m.group(1).strip()
+            low = section.lower()
+            if low == 'mcu':
+                name = 'mcu'
+            elif low.startswith('mcu '):
+                name = section.split(None, 1)[1].strip()
+            else:
+                continue
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                print(name)
+PY
+}
+
+ask_active_mcu_name() {
+    local -a names=()
+    local selection max_choice selected section_name
+
+    mapfile -t names < <(collect_active_mcu_names)
+
+    printf '\nExisting MCU for Eddy Coil I2C\n'
+    info "Eddy Coil does not create a dedicated [mcu eddy] section."
+    info "Select the already-configured MCU/toolboard whose I2C port is wired to the coil."
+
+    if (( ${#names[@]} > 0 )); then
+        local i
+        for i in "${!names[@]}"; do
+            printf '  %d) %s\n' "$((i + 1))" "${names[$i]}"
+        done
+        max_choice=$(( ${#names[@]} + 1 ))
+        printf '  %d) Enter another active MCU name\n' "${max_choice}"
+        ask_choice "I2C MCU" "1" "1" "${max_choice}"
+        selection="${ANSWER}"
+
+        if (( selection <= ${#names[@]} )); then
+            selected="${names[$((selection - 1))]}"
+        else
+            ask_required "Existing MCU name (for example: mcu, EBBCan, toolhead)"
+            selected="${ANSWER}"
+        fi
+    else
+        warn "No active [mcu ...] sections were discovered automatically."
+        ask_required "Existing MCU name (for example: mcu, EBBCan, toolhead)"
+        selected="${ANSWER}"
+    fi
+
+    if [[ "${selected,,}" == "mcu" ]]; then
+        section_name="mcu"
+    else
+        section_name="mcu ${selected}"
+    fi
+
+    section_record_for_active_name "${section_name}" >/dev/null \
+        || die "Active [${section_name}] was not found. Eddy Coil must reference an existing active MCU."
+
+    ANSWER="${selected}"
+}
+
 extract_section_to_file() {
     local source="$1"
     local section_name="$2"
@@ -1196,9 +1274,11 @@ for i in range(start + 1, len(lines)):
 
 for i in range(start, end):
     s = lines[i]
-    m = re.match(r'^(\s*)#( ?)(.*)$', s)
+    newline = '\n' if s.endswith('\n') else ''
+    body = s[:-1] if newline else s
+    m = re.match(r'^(\s*)#( ?)(.*)$', body)
     if m:
-        lines[i] = m.group(1) + m.group(3)
+        lines[i] = m.group(1) + m.group(3) + newline
 
 with open(output, 'w', encoding='utf-8') as f:
     f.writelines(lines)
@@ -1209,10 +1289,11 @@ PY
 
 generate_fresh_eddy_cfg() {
     local connection serial_value="" can_uuid=""
+    local coil_mcu="" coil_i2c_bus=""
     local x_offset y_offset
     local zero_x zero_y
     local mesh_min_x="" mesh_min_y="" mesh_max_x="" mesh_max_y=""
-    local cal_bed_temp cal_extruder_temp max_validation_temp
+    local cal_bed_temp="" cal_extruder_temp="" max_validation_temp=""
     local tmp_cfg
     local create_bed_mesh=0
 
@@ -1222,23 +1303,35 @@ generate_fresh_eddy_cfg() {
     printf '\n%sCreate canonical Eddy configuration%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "Destination: ${DST_EDDY}"
 
-    printf '\nConnection:\n'
-    printf '  1) USB\n'
-    printf '  2) CAN\n'
-    ask_choice "Connection" "1" "1" "2"
+    printf '\nEddy hardware / connection:\n'
+    printf '  1) USB-connected Eddy / Eddy Duo\n'
+    printf '  2) CAN-connected Eddy / Eddy Duo\n'
+    printf '  3) Eddy Coil - I2C on an existing printer/toolboard MCU\n'
+    ask_choice "Hardware" "1" "1" "3"
     connection="${ANSWER}"
 
-    if [[ "${connection}" -eq 1 ]]; then
-        ask_required "Eddy USB serial path"
-        serial_value="${ANSWER}"
-    else
-        while true; do
-            ask_required "Eddy CAN UUID"
-            can_uuid="${ANSWER}"
-            validate_can_uuid "${can_uuid}" && break
-            warn "Expected a hexadecimal CAN UUID."
-        done
-    fi
+    case "${connection}" in
+        1)
+            ask_required "Eddy USB serial path"
+            serial_value="${ANSWER}"
+            ;;
+        2)
+            while true; do
+                ask_required "Eddy CAN UUID"
+                can_uuid="${ANSWER}"
+                validate_can_uuid "${can_uuid}" && break
+                warn "Expected a hexadecimal CAN UUID."
+            done
+            ;;
+        3)
+            printf '\n%sEddy Coil configuration%s\n' "${BOLD}" "${RESET}"
+            info "Eddy Coil is an I2C sensor and does not have its own USB/CAN MCU connection."
+            ask_active_mcu_name
+            coil_mcu="${ANSWER}"
+            ask_required "I2C bus used by Eddy Coil on ${coil_mcu} (for example: i2c1, i2c1a, i2c0f)"
+            coil_i2c_bus="${ANSWER}"
+            ;;
+    esac
 
     printf '\nProbe/nozzle offsets\n'
     ask_number "X offset"
@@ -1296,17 +1389,34 @@ generate_fresh_eddy_cfg() {
     mesh_max_x="${mesh_max_x:-0}"
     mesh_max_y="${mesh_max_y:-0}"
 
-    printf '\nTemperature compensation settings\n'
-    ask_number "Calibration bed temperature" "95"
-    cal_bed_temp="${ANSWER}"
-    ask_number "Calibration extruder temperature" "150"
-    cal_extruder_temp="${ANSWER}"
-    ask_number "Maximum validation temperature" "100"
-    max_validation_temp="${ANSWER}"
+    if [[ "${connection}" -ne 3 ]]; then
+        printf '\nTemperature compensation settings\n'
+        ask_number "Calibration bed temperature" "95"
+        cal_bed_temp="${ANSWER}"
+        ask_number "Calibration extruder temperature" "150"
+        cal_extruder_temp="${ANSWER}"
+        ask_number "Maximum validation temperature" "100"
+        max_validation_temp="${ANSWER}"
+    fi
 
     printf '\n%sConfiguration summary%s\n' "${BOLD}" "${RESET}"
     printf 'Destination:                  %s\n' "${DST_EDDY}"
-    printf 'Connection:                   %s\n' "$([[ "${connection}" -eq 1 ]] && printf USB || printf CAN)"
+    case "${connection}" in
+        1)
+            printf 'Hardware:                     USB-connected Eddy\n'
+            printf 'Eddy serial:                  %s\n' "${serial_value}"
+            ;;
+        2)
+            printf 'Hardware:                     CAN-connected Eddy\n'
+            printf 'Eddy CAN UUID:                %s\n' "${can_uuid}"
+            ;;
+        3)
+            printf 'Hardware:                     Eddy Coil (existing-MCU I2C)\n'
+            printf 'I2C MCU:                      %s\n' "${coil_mcu}"
+            printf 'I2C bus:                      %s\n' "${coil_i2c_bus}"
+            printf 'Temperature compensation:     not generated for Eddy Coil\n'
+            ;;
+    esac
     printf 'Probe offsets:                X=%s Y=%s\n' "${x_offset}" "${y_offset}"
     printf 'zero_reference_position:      %s\n' "${ZERO_REFERENCE_VALUE}"
     if [[ "${create_bed_mesh}" -eq 1 ]]; then
@@ -1332,18 +1442,88 @@ generate_fresh_eddy_cfg() {
     replace_placeholder "${tmp_cfg}" "MESH_MIN_Y" "${mesh_min_y}"
     replace_placeholder "${tmp_cfg}" "MESH_MAX_X" "${mesh_max_x}"
     replace_placeholder "${tmp_cfg}" "MESH_MAX_Y" "${mesh_max_y}"
-    replace_placeholder "${tmp_cfg}" "CALIBRATION_BED_TEMP" "${cal_bed_temp}"
-    replace_placeholder "${tmp_cfg}" "CALIBRATION_EXTRUDER_TEMP" "${cal_extruder_temp}"
-    replace_placeholder "${tmp_cfg}" "MAX_VALIDATION_TEMP" "${max_validation_temp}"
 
-    if [[ "${connection}" -eq 1 ]]; then
-        replace_placeholder "${tmp_cfg}" "EDDY_SERIAL" "${serial_value}"
-    else
-        replace_placeholder "${tmp_cfg}" "EDDY_CANBUS_UUID" "${can_uuid}"
-        sed -i -E 's|^serial:[[:space:]].*$|#serial: {{EDDY_SERIAL}}|' "${tmp_cfg}"
-        sed -i -E 's|^restart_method:[[:space:]]*command[[:space:]]*$|#restart_method: command|' "${tmp_cfg}"
-        sed -i -E 's|^#canbus_uuid:[[:space:]]*|canbus_uuid: |' "${tmp_cfg}"
-    fi
+    case "${connection}" in
+        1)
+            replace_placeholder "${tmp_cfg}" "CALIBRATION_BED_TEMP" "${cal_bed_temp}"
+            replace_placeholder "${tmp_cfg}" "CALIBRATION_EXTRUDER_TEMP" "${cal_extruder_temp}"
+            replace_placeholder "${tmp_cfg}" "MAX_VALIDATION_TEMP" "${max_validation_temp}"
+            replace_placeholder "${tmp_cfg}" "EDDY_SERIAL" "${serial_value}"
+            ;;
+        2)
+            replace_placeholder "${tmp_cfg}" "CALIBRATION_BED_TEMP" "${cal_bed_temp}"
+            replace_placeholder "${tmp_cfg}" "CALIBRATION_EXTRUDER_TEMP" "${cal_extruder_temp}"
+            replace_placeholder "${tmp_cfg}" "MAX_VALIDATION_TEMP" "${max_validation_temp}"
+            replace_placeholder "${tmp_cfg}" "EDDY_CANBUS_UUID" "${can_uuid}"
+            sed -i -E 's|^serial:[[:space:]].*$|#serial: {{EDDY_SERIAL}}|' "${tmp_cfg}"
+            sed -i -E 's|^restart_method:[[:space:]]*command[[:space:]]*$|#restart_method: command|' "${tmp_cfg}"
+            sed -i -E 's|^#canbus_uuid:[[:space:]]*|canbus_uuid: |' "${tmp_cfg}"
+            ;;
+        3)
+            # Eddy Coil is only the LDC coil/sensor.  It uses an existing MCU's
+            # I2C bus, so remove the dedicated-board MCU/temperature blocks while
+            # preserving the remainder of the canonical template (including the
+            # commented [bed_mesh] and optional printer-section examples).
+            python3 - "${tmp_cfg}" "${coil_mcu}" "${coil_i2c_bus}" <<'PY'
+import re
+import sys
+
+path, coil_mcu, coil_i2c_bus = sys.argv[1:]
+with open(path, encoding='utf-8') as f:
+    lines = f.readlines()
+
+
+def label_index(label):
+    target = '# ' + label
+    for i, line in enumerate(lines):
+        if line.strip() == target:
+            return i
+    raise SystemExit(f"Coil template render failed: heading '{label}' was not found")
+
+
+def banner_start(label):
+    i = label_index(label)
+    if i > 0 and re.match(r'^\s*#{20,}\s*$', lines[i - 1].rstrip('\n')):
+        return i - 1
+    return i
+
+# Remove the dedicated Eddy MCU + MCU-temperature blocks, but retain the Eddy
+# Probe heading and probe section that follow them.
+start_mcu = banner_start('Eddy MCU')
+start_probe = banner_start('Eddy Probe')
+if start_probe <= start_mcu:
+    raise SystemExit('Coil template render failed: unexpected Eddy MCU/Probe block order')
+lines = lines[:start_mcu] + lines[start_probe:]
+
+# Recalculate indexes after the first splice, then remove the dedicated
+# temperature-compensation block.  Eddy Coil has no eddy:gpio26 temperature
+# input, so the Wizard should naturally treat thermal calibration as N/A.
+start_temp = banner_start('Temperature Calibration Settings')
+start_bed = banner_start('Bed Mesh')
+if start_bed <= start_temp:
+    raise SystemExit('Coil template render failed: unexpected temperature/bed-mesh block order')
+lines = lines[:start_temp] + lines[start_bed:]
+
+mcu_rx = re.compile(r'^\s*i2c_mcu\s*:\s*.*$', re.IGNORECASE)
+bus_rx = re.compile(r'^\s*i2c_bus\s*:\s*.*$', re.IGNORECASE)
+mcu_done = False
+bus_done = False
+for i, line in enumerate(lines):
+    if mcu_rx.match(line.rstrip('\n')):
+        lines[i] = f'i2c_mcu: {coil_mcu}\n'
+        mcu_done = True
+    elif bus_rx.match(line.rstrip('\n')):
+        lines[i] = f'i2c_bus: {coil_i2c_bus}\n'
+        bus_done = True
+
+if not (mcu_done and bus_done):
+    raise SystemExit('Coil template render failed: probe i2c_mcu/i2c_bus options were not found')
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.writelines(lines)
+PY
+            ;;
+    esac
 
     if grep -nE '^[[:space:]]*[^#[:space:]].*\{\{[A-Z0-9_]+\}\}' "${tmp_cfg}" >/dev/null; then
         error "Unresolved active placeholders remain in the template:"
@@ -1359,6 +1539,11 @@ generate_fresh_eddy_cfg() {
     rm -f -- "${tmp_cfg}"
     chmod 0644 "${DST_EDDY}" 2>/dev/null || true
     ok "Generated user-owned Eddy configuration: ${DST_EDDY}"
+
+    if [[ "${connection}" -eq 3 ]]; then
+        info "Eddy Coil uses active [mcu ${coil_mcu}] I2C settings; that MCU remains in its existing config file."
+        info "No [temperature_probe eddy] was generated, so thermal compensation will be treated as not applicable."
+    fi
 
     if [[ "${create_bed_mesh}" -eq 1 ]]; then
         activate_commented_example "bed_mesh"
@@ -1457,13 +1642,15 @@ copy_existing_dedicated_eddy_cfg() {
 
 native_source_looks_dedicated() {
     local source="$1"
-    local base
-    base="$(basename -- "${source}")"
 
-    [[ "${base,,}" == *eddy* ]] && return 0
-
+    # Judge ownership by active section content, not by the filename.  An Eddy
+    # Coil config is often named eddy.cfg while referencing a shared toolboard
+    # MCU such as [mcu EBBCan].  Treating the filename alone as proof of Eddy
+    # ownership could move that shared MCU into the Wizard directory and later
+    # make Full Eddy Uninstall unsafe.
+    #
     # If every active section in the file is clearly Eddy/Wizard related,
-    # consider it a dedicated Eddy config even if the filename is custom.
+    # consider it a dedicated Eddy config.
     python3 - "${source}" <<'PY'
 import re, sys
 p = sys.argv[1]
@@ -1510,50 +1697,37 @@ normalize_existing_native() {
         die "The Wizard now requires the canonical ${EDDY_DIR}/ layout."
     fi
 
-    # Mixed source file: build a canonical Eddy file from the single template,
-    # but preserve the user's existing probe section verbatim in the example
-    # replacement slot. This avoids copying unrelated printer.cfg content.
+    # Mixed source file: preserve the working hardware dependencies where they
+    # already live and migrate only the native probe section into the canonical
+    # Wizard file.  This is important for Eddy Coil, whose i2c_mcu normally
+    # points at an existing printer/toolboard MCU rather than a dedicated Eddy MCU.
     warn "The native Eddy probe is inside a mixed printer configuration file."
-    info "The installer will create canonical eddy/eddy.cfg and migrate only explicitly selected sections."
-
-    # Fresh template requires connection/geometry fields. Reuse existing probe
-    # offsets when present but still use the normal fresh generator for hardware
-    # identity and temperature-compensation questions.
-    generate_fresh_eddy_cfg
+    info "Only [${NATIVE_PROBE_SECTION}] will be moved into canonical eddy/eddy.cfg."
+    info "Existing MCU, I2C owner, temperature, and unrelated printer sections will remain in place."
 
     local tmp_section
     tmp_section="$(mktemp)"
     extract_section_to_file "${source}" "${NATIVE_PROBE_SECTION}" "${tmp_section}"
 
-    # Remove the template-generated probe section and insert the user's actual
-    # native probe section in its place.
-    python3 - "${DST_EDDY}" "${NATIVE_PROBE_SECTION}" "${tmp_section}" <<'PY'
-import re, sys
-dest, target, repl_file = sys.argv[1:]
-with open(dest, encoding='utf-8') as f: lines=f.readlines()
-with open(repl_file, encoding='utf-8') as f: repl=f.readlines()
+    [[ ! -e "${DST_EDDY}" && ! -L "${DST_EDDY}" ]] \
+        || { rm -f -- "${tmp_section}"; die "${DST_EDDY} already exists and will not be overwritten."; }
 
-# Replace the first active probe_eddy_current section, regardless of its name.
-hdr=re.compile(r'^\s*\[probe_eddy_current\s+[^\]]+\]\s*(?:#.*)?$', re.I)
-anyhdr=re.compile(r'^\s*\[[^\]]+\]\s*(?:#.*)?$')
-start=None
-for i,l in enumerate(lines):
-    if hdr.match(l.rstrip('\n')):
-        start=i; break
-if start is None:
-    raise SystemExit(2)
-end=len(lines)
-for i in range(start+1,len(lines)):
-    if anyhdr.match(lines[i].rstrip('\n')):
-        end=i; break
-lines=lines[:start]+repl+['\n']+lines[end:]
-with open(dest,'w',encoding='utf-8') as f:f.writelines(lines)
-PY
+    mkdir -p "${EDDY_DIR}"
+    {
+        printf '%s\n' '[include eddy_setup_wizard.cfg]'
+        printf '%s\n' '[include eddy_macros.cfg]'
+        printf '%s\n' '[include eddy_clear_calibration.cfg]'
+        printf '\n'
+        printf '%s\n' '# Native Eddy probe migrated from the existing active configuration.'
+        cat "${tmp_section}"
+    } > "${DST_EDDY}"
+    chmod 0644 "${DST_EDDY}" 2>/dev/null || true
     rm -f -- "${tmp_section}"
 
     backup_path "${source}" "$(basename -- "${source}").before_native_probe_migration"
     remove_section_from_file "${source}" "${NATIVE_PROBE_SECTION}"
     ok "Migrated existing [${NATIVE_PROBE_SECTION}] into canonical eddy.cfg."
+    info "Its existing hardware/MCU dependencies were preserved in ${source}."
 }
 
 # ---------------------------------------------------------------------------
@@ -2576,6 +2750,13 @@ probe_key = f"probe_eddy_current {probe_name}".lower()
 temp_probe_key = f"temperature_probe {probe_name}".lower()
 mcu_key = f"mcu {eddy_mcu}".lower()
 
+# A native Eddy/Duo normally owns its dedicated MCU, but Eddy Coil references
+# an existing printer/toolboard MCU.  If the referenced MCU name is not
+# clearly Eddy-owned, preserve it during Full Eddy Uninstall instead of
+# risking deletion of a shared toolboard configuration.
+mcu_name_lower = eddy_mcu.lower()
+mcu_is_clearly_eddy_owned = "eddy" in mcu_name_lower
+
 plan = []
 restore_sections = []
 
@@ -2602,12 +2783,20 @@ for section in sections:
         classification = "EDDY"
 
     elif lower == mcu_key:
-        classification = "EDDY"
+        if mcu_is_clearly_eddy_owned:
+            classification = "EDDY"
+        else:
+            classification = "RESTORE"
+            restore_sections.append(section)
 
     elif lower.startswith("temperature_sensor "):
         sensor_mcu = option(section, "sensor_mcu")
         if sensor_mcu.lower() == eddy_mcu.lower():
-            classification = "EDDY"
+            if mcu_is_clearly_eddy_owned:
+                classification = "EDDY"
+            else:
+                classification = "RESTORE"
+                restore_sections.append(section)
         else:
             classification = "UNKNOWN"
 
@@ -2802,7 +2991,12 @@ PY
     printf '\n%sFull uninstall plan%s\n' "${BOLD}" "${RESET}"
     printf '%s\n' "------------------------------------------------------------"
     printf 'Eddy probe:                  %s\n' "${probe_name}"
-    printf 'Eddy MCU:                    %s\n' "${eddy_mcu}"
+    printf 'Probe I2C MCU:               %s\n' "${eddy_mcu}"
+
+    if [[ "${eddy_mcu,,}" != *eddy* ]]; then
+        warn "The probe references MCU '${eddy_mcu}', which is not clearly Eddy-owned."
+        warn "If that MCU section is stored in eddy.cfg, Full Uninstall will restore it to printer.cfg instead of deleting it."
+    fi
 
     if (( ${#restore_sections[@]} > 0 )); then
         printf 'Sections restored to printer.cfg:\n'
