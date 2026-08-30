@@ -827,6 +827,195 @@ ask_active_mcu_name() {
     ANSWER="${selected}"
 }
 
+
+collect_inactive_eddy_i2c_configs() {
+    (( ${#INACTIVE_EDDY_FILES[@]} > 0 )) || return 0
+
+    python3 - "${INACTIVE_EDDY_FILES[@]}" <<'PY'
+import re
+import sys
+
+header_rx = re.compile(r'^\s*\[([^\]]+)\]\s*(?:#.*)?$')
+option_rx = re.compile(r'^\s*([A-Za-z0-9_]+)\s*:\s*(.*?)\s*(?:#.*)?$')
+separator = '\x1f'
+
+for path in sys.argv[1:]:
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except OSError:
+        continue
+
+    sections = []
+    for index, line in enumerate(lines):
+        match = header_rx.match(line.rstrip('\n'))
+        if match:
+            sections.append((index, match.group(1).strip()))
+
+    for pos, (start, section_name) in enumerate(sections):
+        if not section_name.lower().startswith('probe_eddy_current '):
+            continue
+
+        end = sections[pos + 1][0] if pos + 1 < len(sections) else len(lines)
+        options = {}
+
+        for line in lines[start + 1:end]:
+            match = option_rx.match(line.rstrip('\n'))
+            if match:
+                options[match.group(1).lower()] = match.group(2).strip()
+
+        mcu = options.get('i2c_mcu', '')
+        bus = options.get('i2c_bus', '')
+        scl = options.get('i2c_software_scl_pin', '')
+        sda = options.get('i2c_software_sda_pin', '')
+        speed = options.get('i2c_speed', '')
+
+        if not mcu:
+            continue
+
+        if bus and not scl and not sda:
+            method = 'hardware'
+        elif not bus and scl and sda:
+            method = 'software'
+        else:
+            # Incomplete or mixed definitions are not safe to reuse automatically.
+            continue
+
+        fields = [
+            path,
+            section_name,
+            mcu,
+            method,
+            bus,
+            scl,
+            sda,
+            speed,
+        ]
+
+        if any(separator in value or '\n' in value for value in fields):
+            continue
+
+        print(separator.join(fields))
+PY
+}
+
+
+detect_existing_eddy_i2c_config() {
+    local -a candidates=()
+    local record source section mcu method bus scl sda speed section_name
+
+    while IFS= read -r record; do
+        [[ -n "${record}" ]] || continue
+
+        IFS=$'\x1f' read -r \
+            source section mcu method bus scl sda speed \
+            <<< "${record}"
+
+        if [[ "${mcu,,}" == "mcu" ]]; then
+            section_name="mcu"
+        else
+            section_name="mcu ${mcu}"
+        fi
+
+        if section_record_for_active_name "${section_name}" >/dev/null; then
+            candidates+=("${record}")
+        else
+            warn "Previous Eddy I2C settings in ${source} reference inactive MCU '${mcu}'; not reusing them automatically."
+        fi
+    done < <(collect_inactive_eddy_i2c_configs)
+
+    (( ${#candidates[@]} > 0 )) || return 1
+
+    if (( ${#candidates[@]} > 1 )); then
+        warn "Multiple reusable previous Eddy I2C configurations were found."
+        warn "The installer will not guess which one is current; configure I2C manually."
+        return 1
+    fi
+
+    record="${candidates[0]}"
+
+    IFS=$'\x1f' read -r \
+        source section mcu method bus scl sda speed \
+        <<< "${record}"
+
+    printf '\nExisting Eddy I2C configuration detected\n'
+    printf 'Source:                         %s\n' "${source}"
+    printf 'Probe section:                  [%s]\n' "${section}"
+    printf 'I2C MCU:                        %s\n' "${mcu}"
+
+    if [[ "${method}" == "hardware" ]]; then
+        printf 'I2C method:                     Hardware I2C\n'
+        printf 'I2C bus:                        %s\n' "${bus}"
+    else
+        printf 'I2C method:                     Software I2C\n'
+        printf 'Software SCL pin:               %s\n' "${scl}"
+        printf 'Software SDA pin:               %s\n' "${sda}"
+    fi
+
+    [[ -z "${speed}" ]] \
+        || printf 'I2C speed:                      %s\n' "${speed}"
+
+    ask_yes_no "Reuse these existing Eddy I2C settings?" "y" || return 1
+
+    ANSWER="${record}"
+    return 0
+}
+
+
+ask_coil_i2c_settings() {
+    local source=""
+    local mcu=""
+    local method=""
+    local bus=""
+    local scl=""
+    local sda=""
+    local speed=""
+
+    if detect_existing_eddy_i2c_config; then
+        return 0
+    fi
+
+    ask_active_mcu_name
+    mcu="${ANSWER}"
+
+    printf '\nI2C connection method for %s\n' "${mcu}"
+    printf '  1) Hardware I2C bus\n'
+    printf '     Uses: i2c_bus: <bus name>\n'
+    printf '  2) Software I2C pins\n'
+    printf '     Uses: i2c_software_scl_pin / i2c_software_sda_pin\n'
+    ask_choice "I2C method" "1" "1" "2"
+
+    if [[ "${ANSWER}" -eq 1 ]]; then
+        method="hardware"
+
+        ask_required \
+            "I2C bus used by Eddy Coil on ${mcu} (for example: i2c1, i2c1a, i2c0f)"
+        bus="${ANSWER}"
+    else
+        method="software"
+
+        info "Enter the same SCL/SDA values used by the previous working Eddy configuration when available."
+
+        ask_required "Software I2C SCL pin"
+        scl="${ANSWER}"
+
+        ask_required "Software I2C SDA pin"
+        sda="${ANSWER}"
+    fi
+
+    printf -v ANSWER \
+        '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' \
+        "${source}" \
+        "manual" \
+        "${mcu}" \
+        "${method}" \
+        "${bus}" \
+        "${scl}" \
+        "${sda}" \
+        "${speed}"
+}
+
+
 extract_section_to_file() {
     local source="$1"
     local section_name="$2"
@@ -1293,7 +1482,9 @@ PY
 
 generate_fresh_eddy_cfg() {
     local connection serial_value="" can_uuid=""
-    local coil_mcu="" coil_i2c_bus=""
+    local coil_mcu="" coil_i2c_method="" coil_i2c_bus=""
+    local coil_i2c_scl_pin="" coil_i2c_sda_pin="" coil_i2c_speed=""
+    local coil_i2c_source="" coil_i2c_section=""
     local x_offset y_offset
     local zero_x zero_y
     local mesh_min_x="" mesh_min_y="" mesh_max_x="" mesh_max_y=""
@@ -1330,10 +1521,20 @@ generate_fresh_eddy_cfg() {
         3)
             printf '\n%sEddy Coil configuration%s\n' "${BOLD}" "${RESET}"
             info "Eddy Coil is an I2C sensor and does not have its own USB/CAN MCU connection."
-            ask_active_mcu_name
-            coil_mcu="${ANSWER}"
-            ask_required "I2C bus used by Eddy Coil on ${coil_mcu} (for example: i2c1, i2c1a, i2c0f)"
-            coil_i2c_bus="${ANSWER}"
+            info "Checking previous Eddy configuration for reusable I2C settings."
+
+            ask_coil_i2c_settings
+
+            IFS=$'\x1f' read -r \
+                coil_i2c_source \
+                coil_i2c_section \
+                coil_mcu \
+                coil_i2c_method \
+                coil_i2c_bus \
+                coil_i2c_scl_pin \
+                coil_i2c_sda_pin \
+                coil_i2c_speed \
+                <<< "${ANSWER}"
             ;;
     esac
 
@@ -1417,7 +1618,23 @@ generate_fresh_eddy_cfg() {
         3)
             printf 'Hardware:                     Eddy Coil (existing-MCU I2C)\n'
             printf 'I2C MCU:                      %s\n' "${coil_mcu}"
-            printf 'I2C bus:                      %s\n' "${coil_i2c_bus}"
+
+            if [[ -n "${coil_i2c_source}" ]]; then
+                printf 'I2C settings source:          %s\n' "${coil_i2c_source}"
+            fi
+
+            if [[ "${coil_i2c_method}" == "hardware" ]]; then
+                printf 'I2C method:                   Hardware I2C\n'
+                printf 'I2C bus:                      %s\n' "${coil_i2c_bus}"
+            else
+                printf 'I2C method:                   Software I2C\n'
+                printf 'Software SCL pin:             %s\n' "${coil_i2c_scl_pin}"
+                printf 'Software SDA pin:             %s\n' "${coil_i2c_sda_pin}"
+            fi
+
+            [[ -z "${coil_i2c_speed}" ]] \
+                || printf 'I2C speed:                    %s\n' "${coil_i2c_speed}"
+
             printf 'Temperature compensation:     not generated for Eddy Coil\n'
             ;;
     esac
@@ -1465,14 +1682,35 @@ generate_fresh_eddy_cfg() {
             ;;
         3)
             # Eddy Coil is only the LDC coil/sensor.  It uses an existing MCU's
-            # I2C bus, so remove the dedicated-board MCU/temperature blocks while
-            # preserving the remainder of the canonical template (including the
-            # commented [bed_mesh] and optional printer-section examples).
-            python3 - "${tmp_cfg}" "${coil_mcu}" "${coil_i2c_bus}" <<'PY'
+            # I2C connection, so remove the dedicated-board MCU/temperature
+            # blocks while preserving the remainder of the canonical template
+            # (including the commented [bed_mesh] and optional printer-section
+            # examples).
+            #
+            # Eddy Coil may use either a hardware i2c_bus or Klipper software
+            # I2C pins. Preserve the previously working method when it was
+            # detected from an existing Eddy configuration.
+            python3 - \
+                "${tmp_cfg}" \
+                "${coil_mcu}" \
+                "${coil_i2c_method}" \
+                "${coil_i2c_bus}" \
+                "${coil_i2c_scl_pin}" \
+                "${coil_i2c_sda_pin}" \
+                "${coil_i2c_speed}" <<'PY'
 import re
 import sys
 
-path, coil_mcu, coil_i2c_bus = sys.argv[1:]
+(
+    path,
+    coil_mcu,
+    coil_i2c_method,
+    coil_i2c_bus,
+    coil_scl,
+    coil_sda,
+    coil_speed,
+) = sys.argv[1:]
+
 with open(path, encoding='utf-8') as f:
     lines = f.readlines()
 
@@ -1482,46 +1720,121 @@ def label_index(label):
     for i, line in enumerate(lines):
         if line.strip() == target:
             return i
-    raise SystemExit(f"Coil template render failed: heading '{label}' was not found")
+    raise SystemExit(
+        f"Coil template render failed: heading '{label}' was not found"
+    )
 
 
 def banner_start(label):
     i = label_index(label)
-    if i > 0 and re.match(r'^\s*#{20,}\s*$', lines[i - 1].rstrip('\n')):
+    if i > 0 and re.match(
+        r'^\s*#{20,}\s*$',
+        lines[i - 1].rstrip('\n')
+    ):
         return i - 1
     return i
+
 
 # Remove the dedicated Eddy MCU + MCU-temperature blocks, but retain the Eddy
 # Probe heading and probe section that follow them.
 start_mcu = banner_start('Eddy MCU')
 start_probe = banner_start('Eddy Probe')
+
 if start_probe <= start_mcu:
-    raise SystemExit('Coil template render failed: unexpected Eddy MCU/Probe block order')
+    raise SystemExit(
+        'Coil template render failed: unexpected Eddy MCU/Probe block order'
+    )
+
 lines = lines[:start_mcu] + lines[start_probe:]
 
+
 # Recalculate indexes after the first splice, then remove the dedicated
-# temperature-compensation block.  Eddy Coil has no eddy:gpio26 temperature
+# temperature-compensation block. Eddy Coil has no eddy:gpio26 temperature
 # input, so the Wizard should naturally treat thermal calibration as N/A.
 start_temp = banner_start('Temperature Calibration Settings')
 start_bed = banner_start('Bed Mesh')
+
 if start_bed <= start_temp:
-    raise SystemExit('Coil template render failed: unexpected temperature/bed-mesh block order')
+    raise SystemExit(
+        'Coil template render failed: unexpected temperature/bed-mesh block order'
+    )
+
 lines = lines[:start_temp] + lines[start_bed:]
 
-mcu_rx = re.compile(r'^\s*i2c_mcu\s*:\s*.*$', re.IGNORECASE)
-bus_rx = re.compile(r'^\s*i2c_bus\s*:\s*.*$', re.IGNORECASE)
-mcu_done = False
-bus_done = False
-for i, line in enumerate(lines):
-    if mcu_rx.match(line.rstrip('\n')):
-        lines[i] = f'i2c_mcu: {coil_mcu}\n'
-        mcu_done = True
-    elif bus_rx.match(line.rstrip('\n')):
-        lines[i] = f'i2c_bus: {coil_i2c_bus}\n'
-        bus_done = True
 
-if not (mcu_done and bus_done):
-    raise SystemExit('Coil template render failed: probe i2c_mcu/i2c_bus options were not found')
+mcu_rx = re.compile(
+    r'^\s*i2c_mcu\s*:\s*.*$',
+    re.IGNORECASE
+)
+
+bus_rx = re.compile(
+    r'^\s*i2c_bus\s*:\s*.*$',
+    re.IGNORECASE
+)
+
+mcu_index = None
+bus_index = None
+
+for i, line in enumerate(lines):
+    stripped = line.rstrip('\n')
+
+    if mcu_index is None and mcu_rx.match(stripped):
+        mcu_index = i
+
+    elif bus_index is None and bus_rx.match(stripped):
+        bus_index = i
+
+
+if mcu_index is None or bus_index is None:
+    raise SystemExit(
+        'Coil template render failed: probe i2c_mcu/i2c_bus options were not found'
+    )
+
+
+lines[mcu_index] = f'i2c_mcu: {coil_mcu}\n'
+
+
+if coil_i2c_method == 'hardware':
+    if not coil_i2c_bus:
+        raise SystemExit(
+            'Coil template render failed: hardware I2C was selected '
+            'without an i2c_bus value'
+        )
+
+    replacement = [
+        f'i2c_bus: {coil_i2c_bus}\n'
+    ]
+
+elif coil_i2c_method == 'software':
+    if not coil_scl or not coil_sda:
+        raise SystemExit(
+            'Coil template render failed: software I2C requires '
+            'both SCL and SDA pins'
+        )
+
+    replacement = [
+        f'i2c_software_scl_pin: {coil_scl}\n',
+        f'i2c_software_sda_pin: {coil_sda}\n',
+    ]
+
+else:
+    raise SystemExit(
+        f"Coil template render failed: unknown I2C method "
+        f"'{coil_i2c_method}'"
+    )
+
+
+if coil_speed:
+    replacement.append(
+        f'i2c_speed: {coil_speed}\n'
+    )
+
+
+# The canonical template contains i2c_bus as its single I2C placeholder.
+# Replace that one line with either the hardware-bus definition or the
+# software-I2C pin definitions discovered/selected above.
+lines[bus_index:bus_index + 1] = replacement
+
 
 with open(path, 'w', encoding='utf-8') as f:
     f.writelines(lines)
