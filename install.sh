@@ -79,6 +79,7 @@ BACKUP_CREATED=0
 AUTO_YES=0
 DO_UPDATE=0
 DETECT_ONLY=0
+DETECT_ONLY_FROM_MENU=0
 UNINSTALL_WIZARD=0
 FULL_UNINSTALL=0
 PREPARE_KLIPPER_UPDATE=0
@@ -333,7 +334,10 @@ if [[ "${AFTER_PULL}" -ne 1 \
 		2) DO_UPDATE=1 ;;
 		3) UNINSTALL_WIZARD=1 ;;
 		4) FULL_UNINSTALL=1 ;;
-		5) DETECT_ONLY=1 ;;
+		5)
+			DETECT_ONLY=1
+			DETECT_ONLY_FROM_MENU=1
+			;;
 		6) PREPARE_KLIPPER_UPDATE=1 ;;
 		7)
 			clear_screen
@@ -3081,6 +3085,18 @@ if [[ "${DETECT_ONLY}" -eq 1 ]]; then
     printf '%s\n' "------------------------------------------------------------"
     printf '  %s\n' "${ACTIVE_CFG_FILES[@]}"
     printf '\nDetection complete. No files were modified.\n'
+
+    if [[ "${DETECT_ONLY_FROM_MENU}" -eq 1 ]]; then
+        printf '\n'
+        read -r -p "Press Enter to return to the main menu..."
+
+        if [[ "${AUTO_YES}" -eq 1 ]]; then
+            exec "${SCRIPT_PATH}" --yes
+        else
+            exec "${SCRIPT_PATH}"
+        fi
+    fi
+
     exit 0
 fi
 
