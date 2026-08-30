@@ -1550,6 +1550,8 @@ A Core Manual Install may omit `eddy_clear_calibration.cfg` until the optional c
 
 <br>
 
+Eddy baseline configuration found on klipper website: https://github.com/Klipper3d/klipper/blob/master/docs/Config_Reference.md#probe_eddy_current
+
 The Eddy MCU may be connected by USB or CAN.
 
 The installer collects the required connection information during fresh installation.
