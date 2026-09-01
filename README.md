@@ -523,8 +523,40 @@ The **manual fallback does not convert Eddy-NG or BTT/Rappetor configurations in
 
 <details>
 <summary><strong>Automatic Installation — Recommended</strong></summary>
-
 <br>
+
+### Download / Clone the Wizard
+
+Before running the installer, download the Klipper Eddy Tap Wizard repository.
+
+The automatic installer is currently available on the `test` branch. Clone the repository with:
+
+```bash
+cd ~
+git clone --branch test https://github.com/ss1gohan13/Klipper-Eddy-Tap-Wizard.git
+```
+
+Then enter the project directory:
+
+```bash
+cd ~/Klipper-Eddy-Tap-Wizard
+```
+
+You can verify that the `test` branch is checked out with:
+
+```bash
+git branch --show-current
+```
+
+The output should be:
+
+```text
+test
+```
+
+The repository contains the installer along with the Wizard configuration files, macros, templates, scripts, and Klipper support files used during installation.
+
+### Run the Installer
 
 Run the installer from the project directory:
 
