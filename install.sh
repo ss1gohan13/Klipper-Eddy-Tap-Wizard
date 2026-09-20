@@ -1246,11 +1246,15 @@ validate_zero_reference_position() {
             return 0
         fi
 
-        printf '\n%s[bed_mesh] requires zero_reference_position%s\n' "${BOLD}" "${RESET}"
+        printf '\nBed center position\n'
         info "Existing [bed_mesh]: ${BED_MESH_FILE}"
-        ask_number "Zero reference X"
+        printf '%s\n' 'What is the center position of your bed (with the nozzle)?'
+        printf '%s\n' 'For example: a 300 x 300 mm bed usually has its center at X=150, Y=150.'
+        printf '%s\n' 'Use the nozzle coordinates at the center of your usable bed.'
+        printf '%s\n\n' 'Enter X and Y separately below.'
+        ask_number "Bed center X (mm)"
         zrx="${ANSWER}"
-        ask_number "Zero reference Y"
+        ask_number "Bed center Y (mm)"
         zry="${ANSWER}"
         ZERO_REFERENCE_VALUE="${zrx}, ${zry}"
 
@@ -1526,10 +1530,14 @@ generate_fresh_eddy_cfg() {
         zero_x="$(trim "${zero_x}")"
         zero_y="$(trim "${zero_y}")"
     else
-        printf '\nZero reference position\n'
-        ask_number "Zero reference X"
+        printf '\nBed center position\n'
+        printf '%s\n' 'What is the center position of your bed (with the nozzle)?'
+        printf '%s\n' 'For example: a 300 x 300 mm bed usually has its center at X=150, Y=150.'
+        printf '%s\n' 'Use the nozzle coordinates at the center of your usable bed.'
+        printf '%s\n\n' 'Enter X and Y separately below.'
+        ask_number "Bed center X (mm)"
         zero_x="${ANSWER}"
-        ask_number "Zero reference Y"
+        ask_number "Bed center Y (mm)"
         zero_y="${ANSWER}"
         ZERO_REFERENCE_VALUE="${zero_x}, ${zero_y}"
     fi
