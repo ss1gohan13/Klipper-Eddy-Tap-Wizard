@@ -24,7 +24,6 @@
 #   printer_data/config/eddy_setup_wizard.cfg
 #   scripts/clear_eddy_calibration.py
 #   klipper/klippy/extras/gcode_shell_command.py
-#   klipper/klippy/extras/temperature_probe.py
 #
 set -Eeuo pipefail
 
@@ -48,7 +47,6 @@ SRC_TEMPLATE="${SCRIPT_DIR}/printer_data/config/templates/eddy.cfg.template"
 SRC_CLEAR_TEMPLATE="${SCRIPT_DIR}/printer_data/config/templates/eddy_clear_calibration.cfg.template"
 SRC_CLEAR_SCRIPT="${SCRIPT_DIR}/scripts/clear_eddy_calibration.py"
 SRC_GCODE_SHELL_COMMAND="${SCRIPT_DIR}/klipper/klippy/extras/gcode_shell_command.py"
-SRC_TEMP_PROBE="${SCRIPT_DIR}/klipper/klippy/extras/temperature_probe.py"
 
 # Canonical destination - there is no alternate layout.
 EDDY_DIR="${CONFIG_DIR}/eddy"
@@ -57,19 +55,12 @@ DST_MACROS="${EDDY_DIR}/eddy_macros.cfg"
 DST_WIZARD="${EDDY_DIR}/eddy_setup_wizard.cfg"
 DST_CLEAR="${EDDY_DIR}/eddy_clear_calibration.cfg"
 
-DST_TEMP_PROBE="${KLIPPER_EXTRAS_DIR}/temperature_probe.py"
 DST_GCODE_SHELL_COMMAND="${KLIPPER_EXTRAS_DIR}/gcode_shell_command.py"
 
 STATE_DIR="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/${PROJECT_SLUG}"
-TEMP_HASH_FILE="${STATE_DIR}/temperature_probe.installed.sha256"
-TEMP_BASE_HASH_FILE="${STATE_DIR}/temperature_probe.base.sha256"
-TEMP_BASE_COMMIT_FILE="${STATE_DIR}/temperature_probe.base.commit"
 GCODE_SHELL_HASH_FILE="${STATE_DIR}/gcode_shell_command.installed.sha256"
 CLEAR_CFG_HASH_FILE="${STATE_DIR}/eddy_clear_calibration.installed.sha256"
 
-# temperature_probe.py is a tracked Klipper source file.  Keep its repository
-# path explicit so Git HEAD remains the authoritative source for restoration.
-KLIPPER_TEMP_PROBE_REL="klippy/extras/temperature_probe.py"
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 BACKUP_ROOT="${CONFIG_DIR}/eddy_wizard_backups"
@@ -82,7 +73,6 @@ DETECT_ONLY=0
 DETECT_ONLY_FROM_MENU=0
 UNINSTALL_WIZARD=0
 FULL_UNINSTALL=0
-PREPARE_KLIPPER_UPDATE=0
 AFTER_PULL="${EDDY_WIZARD_AFTER_PULL:-0}"
 
 # Sections that may optionally be consolidated into eddy/eddy.cfg.
@@ -245,7 +235,6 @@ Usage:
   ./install.sh --uninstall
   ./install.sh --uninstall-wizard
   ./install.sh --uninstall-all
-  ./install.sh --prepare-klipper-update
   ./install.sh --yes
 
 Canonical installed layout:
@@ -259,7 +248,6 @@ Options:
   --update                  Fast-forward the currently checked-out Wizard branch, then rerun.
   --detect-only             Scan active and inactive config files without modifying them.
   --uninstall               Remove Wizard integration while preserving user Eddy config.
-  --prepare-klipper-update  Remove the Eddy compatibility patch so Klipper can update cleanly.
   -y, --yes                 Automatically accept normal yes/no prompts.
   -h, --help                Show this help.
 
@@ -287,11 +275,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
-        --prepare-klipper-update)
-            PREPARE_KLIPPER_UPDATE=1
-            shift
-            ;;
-
         -y|--yes) AUTO_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1" ;;
@@ -303,18 +286,16 @@ selected_actions=$(( \
         + DETECT_ONLY
         + UNINSTALL_WIZARD
         + FULL_UNINSTALL
-        + PREPARE_KLIPPER_UPDATE
     ))
 
 (( selected_actions <= 1 )) \
-    || die "--update, --detect-only, --uninstall-wizard, --uninstall-all, and --prepare-klipper-update are mutually exclusive."
+    || die "--update, --detect-only, --uninstall-wizard, and --uninstall-all are mutually exclusive."
 
 if [[ "${AFTER_PULL}" -ne 1 \
    && "${DO_UPDATE}" -eq 0 \
    && "${DETECT_ONLY}" -eq 0 \
    && "${UNINSTALL_WIZARD}" -eq 0 \
-   && "${FULL_UNINSTALL}" -eq 0 \
-   && "${PREPARE_KLIPPER_UPDATE}" -eq 0 ]]; then
+   && "${FULL_UNINSTALL}" -eq 0 ]]; then
     clear_screen
 
 	printf '\n%sChoose action%s\n' "${BOLD}" "${RESET}"
@@ -324,10 +305,9 @@ if [[ "${AFTER_PULL}" -ne 1 \
 	printf '  3) Uninstall Wizard Only\n'
 	printf '  4) Full Eddy Uninstall\n'
 	printf '  5) Detect only\n'
-	printf '  6) Remove Eddy Patch for Klipper Update\n'
-	printf '  7) Exit\n'
+	printf '  6) Exit\n'
 
-	ask_choice "Action" "1" "1" "7"
+	ask_choice "Action" "1" "1" "6"
 
 	case "${ANSWER}" in
 		1) ;;
@@ -338,8 +318,7 @@ if [[ "${AFTER_PULL}" -ne 1 \
 			DETECT_ONLY=1
 			DETECT_ONLY_FROM_MENU=1
 			;;
-		6) PREPARE_KLIPPER_UPDATE=1 ;;
-		7)
+		6)
 			clear_screen
 			printf '%s\n' "Exiting Klipper Eddy Tap Wizard."
 			exit 0
@@ -369,8 +348,7 @@ done
 
 if [[ "${DETECT_ONLY}" -eq 0 \
    && "${UNINSTALL_WIZARD}" -eq 0 \
-   && "${FULL_UNINSTALL}" -eq 0 \
-   && "${PREPARE_KLIPPER_UPDATE}" -eq 0 ]]; then
+   && "${FULL_UNINSTALL}" -eq 0 ]]; then
     [[ -d "${KLIPPER_EXTRAS_DIR}" ]] || die "Klipper extras directory not found: ${KLIPPER_EXTRAS_DIR}"
     for required in \
         "${SRC_MACROS}" \
@@ -378,7 +356,6 @@ if [[ "${DETECT_ONLY}" -eq 0 \
         "${SRC_TEMPLATE}" \
         "${SRC_CLEAR_TEMPLATE}" \
         "${SRC_CLEAR_SCRIPT}" \
-        "${SRC_TEMP_PROBE}" \
         "${SRC_GCODE_SHELL_COMMAND}"; do
         [[ -f "${required}" ]] || die "Repository file missing: ${required}"
     done
@@ -2318,120 +2295,6 @@ EOF
 # Klipper Python dependencies
 # ---------------------------------------------------------------------------
 
-temperature_probe_has_required_behavior() {
-    local file="$1"
-    [[ -f "${file}" ]] || return 1
-
-    grep -Fq 'TAP_START_Z = 5.' "${file}" \
-        && grep -Fq 'tool_zero_z = mpresult.bed_z' "${file}"
-}
-
-klipper_temperature_probe_head_exists() {
-    git -C "${KLIPPER_DIR}" cat-file -e \
-        "HEAD:${KLIPPER_TEMP_PROBE_REL}" 2>/dev/null
-}
-
-temperature_probe_head_has_required_behavior() {
-    local tmp
-    local rc=1
-
-    tmp="$(mktemp)"
-
-    if git -C "${KLIPPER_DIR}" show \
-        "HEAD:${KLIPPER_TEMP_PROBE_REL}" > "${tmp}" 2>/dev/null; then
-        if temperature_probe_has_required_behavior "${tmp}"; then
-            rc=0
-        fi
-    fi
-
-    rm -f -- "${tmp}"
-    return "${rc}"
-}
-
-temperature_probe_is_pristine() {
-    [[ -f "${DST_TEMP_PROBE}" ]] || return 1
-
-    git -C "${KLIPPER_DIR}" diff --quiet -- "${KLIPPER_TEMP_PROBE_REL}" \
-        && git -C "${KLIPPER_DIR}" diff --cached --quiet -- "${KLIPPER_TEMP_PROBE_REL}"
-}
-
-temperature_probe_has_staged_change() {
-    ! git -C "${KLIPPER_DIR}" diff --cached --quiet -- "${KLIPPER_TEMP_PROBE_REL}"
-}
-
-temperature_probe_is_wizard_owned() {
-    local recorded
-    local current
-
-    [[ -f "${TEMP_HASH_FILE}" ]] || return 1
-    [[ -f "${DST_TEMP_PROBE}" ]] || return 1
-
-    recorded="$(tr -d '[:space:]' < "${TEMP_HASH_FILE}")"
-    current="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
-
-    [[ -n "${recorded}" && "${current}" == "${recorded}" ]]
-}
-
-temperature_probe_matches_current_wizard_patch() {
-    [[ -f "${DST_TEMP_PROBE}" ]] || return 1
-    cmp -s "${SRC_TEMP_PROBE}" "${DST_TEMP_PROBE}"
-}
-
-clear_temperature_probe_patch_state() {
-    rm -f -- \
-        "${TEMP_HASH_FILE}" \
-        "${TEMP_BASE_HASH_FILE}" \
-        "${TEMP_BASE_COMMIT_FILE}" \
-        2>/dev/null || true
-}
-
-record_temperature_probe_base() {
-    local base_hash
-    local commit
-
-    mkdir -p "${STATE_DIR}"
-
-    base_hash="$(
-        git -C "${KLIPPER_DIR}" show "HEAD:${KLIPPER_TEMP_PROBE_REL}" \
-            | sha256sum \
-            | awk '{print $1}'
-    )"
-    commit="$(git -C "${KLIPPER_DIR}" rev-parse HEAD)"
-
-    printf '%s\n' "${base_hash}" > "${TEMP_BASE_HASH_FILE}"
-    printf '%s\n' "${commit}" > "${TEMP_BASE_COMMIT_FILE}"
-}
-
-record_temperature_probe_patch() {
-    local desired_hash
-
-    mkdir -p "${STATE_DIR}"
-    desired_hash="$(sha256sum "${SRC_TEMP_PROBE}" | awk '{print $1}')"
-
-    printf '%s\n' "${desired_hash}" > "${TEMP_HASH_FILE}"
-    record_temperature_probe_base
-}
-
-restore_temperature_probe_to_head() {
-    local backup_label="$1"
-
-    temperature_probe_has_staged_change \
-        && die "temperature_probe.py has staged Git changes. Refusing to overwrite them."
-
-    backup_path "${DST_TEMP_PROBE}" "${backup_label}"
-
-    git -C "${KLIPPER_DIR}" restore \
-        --source=HEAD \
-        --worktree \
-        -- "${KLIPPER_TEMP_PROBE_REL}" \
-        || die "Failed to restore Klipper temperature_probe.py from Git HEAD."
-
-    temperature_probe_is_pristine \
-        || die "temperature_probe.py is still modified after Git restore."
-
-    clear_temperature_probe_patch_state
-}
-
 install_managed_python_file() {
     local src="$1"
     local dst="$2"
@@ -2477,231 +2340,6 @@ install_managed_python_file() {
     rm -f -- "${hash_file}"
 }
 
-install_temperature_probe_compatibility() {
-    local desired_hash
-    local current_hash
-
-    mkdir -p "${STATE_DIR}"
-
-    git -C "${KLIPPER_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-        || die "Klipper directory is not a Git worktree: ${KLIPPER_DIR}"
-
-    klipper_temperature_probe_head_exists \
-        || die "Klipper HEAD does not contain ${KLIPPER_TEMP_PROBE_REL}."
-
-    [[ -f "${DST_TEMP_PROBE}" ]] \
-        || die "Installed Klipper temperature_probe.py is missing: ${DST_TEMP_PROBE}"
-
-    desired_hash="$(sha256sum "${SRC_TEMP_PROBE}" | awk '{print $1}')"
-
-    # ------------------------------------------------------------
-    # Native Klipper now contains the behavior required by the Wizard.
-    # The compatibility patch must no longer remain in the Klipper tree.
-    # ------------------------------------------------------------
-    if temperature_probe_head_has_required_behavior; then
-
-        if temperature_probe_is_wizard_owned \
-           || temperature_probe_matches_current_wizard_patch; then
-
-            info "Native Klipper now provides the required Eddy Tap thermal behavior."
-            info "Removing the obsolete Wizard temperature_probe.py compatibility patch."
-
-            restore_temperature_probe_to_head \
-                "temperature_probe.py.before_native_restore"
-
-            ok "Restored native Klipper temperature_probe.py."
-
-        elif temperature_probe_is_pristine; then
-
-            clear_temperature_probe_patch_state
-
-        elif temperature_probe_has_required_behavior "${DST_TEMP_PROBE}"; then
-
-            warn "temperature_probe.py is locally modified but already contains the required Eddy Tap behavior."
-            info "Preserving the compatible custom file."
-            clear_temperature_probe_patch_state
-            return 0
-
-        else
-
-            error "Native Klipper provides the required Eddy Tap behavior, but temperature_probe.py has unknown local modifications."
-            die "Restore or review the custom Klipper file before continuing."
-
-        fi
-
-        ok "Native Klipper temperature_probe.py supports Eddy Tap thermal calibration."
-        return 0
-    fi
-
-    # ------------------------------------------------------------
-    # Mainline Klipper still lacks the required behavior.
-    # Maintain or install the Wizard compatibility patch.
-    # ------------------------------------------------------------
-
-    if temperature_probe_is_wizard_owned; then
-        current_hash="$(sha256sum "${DST_TEMP_PROBE}" | awk '{print $1}')"
-
-        if [[ "${current_hash}" == "${desired_hash}" ]]; then
-            [[ -f "${TEMP_BASE_HASH_FILE}" && -f "${TEMP_BASE_COMMIT_FILE}" ]] \
-                || record_temperature_probe_base
-
-            ok "Eddy Tap temperature_probe.py compatibility patch is current."
-            warn "Klipper will appear locally modified while this compatibility patch is required."
-            return 0
-        fi
-
-        temperature_probe_has_staged_change \
-            && die "temperature_probe.py has staged Git changes. Refusing to overwrite them."
-
-        backup_path \
-            "${DST_TEMP_PROBE}" \
-            "temperature_probe.py.before_patch_update"
-
-        cp -- "${SRC_TEMP_PROBE}" "${DST_TEMP_PROBE}"
-        printf '%s\n' "${desired_hash}" > "${TEMP_HASH_FILE}"
-        [[ -f "${TEMP_BASE_HASH_FILE}" && -f "${TEMP_BASE_COMMIT_FILE}" ]] \
-            || record_temperature_probe_base
-
-        ok "Updated Wizard-managed temperature_probe.py compatibility patch."
-        warn "Klipper will appear locally modified while this compatibility patch is required."
-        return 0
-    fi
-
-    # An exact current Wizard patch may exist after state metadata was deleted
-    # or after an older installer version installed the file.  It is safe to
-    # adopt because the installed bytes exactly match the bundled patch.
-    if temperature_probe_matches_current_wizard_patch; then
-        record_temperature_probe_patch
-        ok "Existing Wizard temperature_probe.py patch recognized and adopted."
-        warn "Klipper will appear locally modified while this compatibility patch is required."
-        return 0
-    fi
-
-    # Another implementation may already provide the same required behavior.
-    # Preserve it, but do not claim ownership.
-    if temperature_probe_has_required_behavior "${DST_TEMP_PROBE}"; then
-        warn "Existing temperature_probe.py already contains the required Eddy Tap behavior."
-        info "Preserving the compatible custom file."
-        clear_temperature_probe_patch_state
-        return 0
-    fi
-
-    # We only replace a pristine file that exactly belongs to the current
-    # Klipper HEAD.  Unknown local modifications are never overwritten.
-    if ! temperature_probe_is_pristine; then
-        error "Klipper temperature_probe.py is already locally modified."
-        error "The required Eddy Tap thermal behavior is not present."
-        die "Refusing to overwrite an unknown Klipper modification."
-    fi
-
-    # First-time compatibility patch installation.
-    backup_path \
-        "${DST_TEMP_PROBE}" \
-        "temperature_probe.py.before_eddy_patch"
-
-    record_temperature_probe_base
-    cp -- "${SRC_TEMP_PROBE}" "${DST_TEMP_PROBE}"
-    printf '%s\n' "${desired_hash}" > "${TEMP_HASH_FILE}"
-
-    ok "Installed Eddy Tap temperature_probe.py compatibility patch."
-    info "Original Klipper temperature_probe.py was backed up."
-    warn "Klipper will appear locally modified while this compatibility patch is required."
-    warn "Use 'Remove Eddy Patch for Klipper Update' before updating Klipper."
-}
-
-prepare_klipper_update() {
-    printf '\n%sRemove Eddy Patch for Klipper Update%s\n' "${BOLD}" "${RESET}"
-    printf '%s\n' "------------------------------------------------------------"
-    printf '%s\n' "The Eddy Tap Wizard may use a temporary modification to Klipper's"
-    printf '%s\n' "temperature_probe.py so Tap-based thermal calibration works correctly."
-    printf '\n'
-    printf '%s\n' "This modification can cause Klipper to appear dirty and can prevent"
-    printf '%s\n' "normal Klipper updates."
-    printf '\n'
-    printf '%s\n' "This option will:"
-    printf '%s\n' "  - Back up the currently installed Wizard patch, when present"
-    printf '%s\n' "  - Restore Klipper's own temperature_probe.py from the current Git HEAD"
-    printf '%s\n' "  - Leave your Eddy configuration and saved calibration unchanged"
-    printf '\n'
-    printf '%s\n' "After updating Klipper, run this installer again and choose"
-    printf '%s\n' "Install / Repair. The Eddy compatibility patch will only be reinstalled"
-    printf '%s\n' "if the updated Klipper version still requires it."
-    printf '\n'
-
-    if ! ask_yes_no "Remove the Eddy compatibility patch and prepare Klipper for update?" "n"; then
-        info "No changes were made."
-        return 0
-    fi
-
-    git -C "${KLIPPER_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-        || die "Klipper directory is not a Git worktree: ${KLIPPER_DIR}"
-
-    klipper_temperature_probe_head_exists \
-        || die "Klipper HEAD does not contain ${KLIPPER_TEMP_PROBE_REL}."
-
-    if temperature_probe_is_wizard_owned \
-       || temperature_probe_matches_current_wizard_patch; then
-
-        info "Wizard-managed temperature_probe.py compatibility patch detected."
-        restore_temperature_probe_to_head \
-            "temperature_probe.py.before_klipper_update"
-        ok "Restored Klipper's native temperature_probe.py."
-        ok "Eddy Tap compatibility patch removed."
-
-    elif temperature_probe_is_pristine; then
-
-        clear_temperature_probe_patch_state
-        ok "Klipper temperature_probe.py is already pristine."
-
-    else
-
-        error "temperature_probe.py contains a modification that is not proven Wizard-owned."
-        die "Refusing to remove an unknown Klipper modification."
-
-    fi
-
-    if [[ -n "$(git -C "${KLIPPER_DIR}" status --porcelain)" ]]; then
-        warn "Other local changes still exist in the Klipper repository."
-        info "Moonraker may still report Klipper as dirty."
-        git -C "${KLIPPER_DIR}" status --short
-    else
-        ok "Klipper Git working tree is clean."
-    fi
-
-    printf '\n'
-    info "Klipper may now be updated normally."
-    info "After the Klipper update, run this installer again with Install / Repair."
-    if [[ "${BACKUP_CREATED}" -eq 1 ]]; then
-        info "Backups: ${BACKUP_DIR}"
-    fi
-}
-
-restore_temperature_probe_for_uninstall() {
-    if temperature_probe_is_wizard_owned \
-       || temperature_probe_matches_current_wizard_patch; then
-
-        info "Restoring native Klipper temperature_probe.py before uninstall."
-        restore_temperature_probe_to_head \
-            "temperature_probe.py.before_wizard_uninstall"
-        ok "Native Klipper temperature_probe.py restored."
-        return 0
-    fi
-
-    if temperature_probe_is_pristine; then
-        clear_temperature_probe_patch_state
-        return 0
-    fi
-
-    if [[ -f "${TEMP_HASH_FILE}" \
-       || -f "${TEMP_BASE_HASH_FILE}" \
-       || -f "${TEMP_BASE_COMMIT_FILE}" ]]; then
-        warn "temperature_probe.py changed after the Wizard patch was installed."
-        warn "The custom Klipper file will be preserved because ownership can no longer be proven."
-    fi
-
-    clear_temperature_probe_patch_state
-}
-
 install_python_dependencies() {
     install_managed_python_file \
         "${SRC_GCODE_SHELL_COMMAND}" \
@@ -2709,7 +2347,6 @@ install_python_dependencies() {
         "${GCODE_SHELL_HASH_FILE}" \
         "gcode_shell_command.py"
 
-    install_temperature_probe_compatibility
 }
 
 # ---------------------------------------------------------------------------
@@ -2794,10 +2431,7 @@ verify_installation() {
         die "Fix missing include targets before Klipper is restarted."
     fi
 
-    temperature_probe_has_required_behavior "${DST_TEMP_PROBE}" \
-        || die "Verification: temperature_probe.py does not contain the required Eddy Tap thermal behavior."
 
-    ok "Required Eddy Tap temperature_probe.py behavior verified."
     ok "Installation verification passed."
 }
 
@@ -2868,7 +2502,6 @@ remove_managed_clear_cfg() {
 		printf '%s\n' "your native Eddy configuration active."
 		printf '\n'
 		printf '%s\n' "This will:"
-		printf '%s\n' "  - Restore native Klipper temperature_probe.py when Wizard-owned"
 		printf '%s\n' "  - Remove Wizard macro/setup/clear-calibration integration"
 		printf '%s\n' "  - Keep eddy/eddy.cfg"
 		printf '%s\n' "  - Keep the active [include eddy/eddy.cfg]"
@@ -2877,7 +2510,6 @@ remove_managed_clear_cfg() {
 
 		ask_yes_no "Uninstall the Eddy Tap Wizard only?" "n" || exit 0
 
-		restore_temperature_probe_for_uninstall
 
 		if [[ -f "${DST_EDDY}" ]]; then
 			backup_path "${DST_EDDY}" "eddy.cfg.before_wizard_uninstall"
@@ -2894,7 +2526,6 @@ remove_managed_clear_cfg() {
 
 		remove_managed_clear_cfg
 
-		clear_temperature_probe_patch_state
 
 		rm -f -- \
 			"${GCODE_SHELL_HASH_FILE}" \
@@ -2936,7 +2567,6 @@ full_uninstall_eddy() {
     printf '%s\n' "  - Back up printer.cfg"
     printf '%s\n' "  - Back up the complete eddy/ directory"
     printf '%s\n' "  - Restore portable printer sections from eddy/eddy.cfg"
-    printf '%s\n' "  - Restore native Klipper temperature_probe.py when Wizard-owned"
     printf '%s\n' "  - Remove Eddy/Wizard include references from printer.cfg"
     printf '%s\n' "  - Remove the complete eddy/ directory"
     printf '%s\n' "  - Preserve gcode_shell_command.py"
@@ -3332,7 +2962,6 @@ PY
     backup_path "${PRINTER_CFG}" "printer.cfg.before_full_eddy_uninstall"
     backup_path "${EDDY_DIR}" "eddy.before_full_uninstall"
 
-    restore_temperature_probe_for_uninstall
 
     cat "${new_printer}" > "${PRINTER_CFG}" \
         || die "Failed to write restored printer.cfg. Backups are available at ${BACKUP_DIR}."
@@ -3342,7 +2971,6 @@ PY
 
     # gcode_shell_command.py is intentionally preserved because another user
     # configuration may depend on it. Full uninstall only removes project state.
-    clear_temperature_probe_patch_state
     rm -rf -- "${STATE_DIR}" 2>/dev/null || true
 
     rebuild_active_tree
@@ -3374,11 +3002,6 @@ PY
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-if [[ "${PREPARE_KLIPPER_UPDATE}" -eq 1 ]]; then
-    prepare_klipper_update
-    exit 0
-fi
 
 rebuild_active_tree
 scan_all_cfg_files
